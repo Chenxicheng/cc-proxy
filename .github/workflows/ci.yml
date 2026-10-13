@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  node:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --runInBand
+      - run: npm run lint
+      - run: npm run build
+
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --manifest-path native/Cargo.toml --check
+      - run: cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path native/Cargo.toml
+      - run: cargo build --manifest-path native/Cargo.toml --release
+
+  native-platforms:
+    name: Native ${{ matrix.package }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-x64-gnu
+            binary: claude-adapter-native
+          - runner: windows-2025
+            package: win32-x64-msvc
+            binary: claude-adapter-native.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - run: cargo test --manifest-path native/Cargo.toml
+      - run: cargo build --manifest-path native/Cargo.toml --release
+      - run: npm run test:protocol
+      - name: Verify native binary
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ../.cc-proxy-target/release/claude-adapter-native.exe --version
+          else
+            ../.cc-proxy-target/release/claude-adapter-native --version
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.package }}
+          path: ../.cc-proxy-target/release/${{ matrix.binary }}
+          if-no-files-found: error
+
+  offline-package:
+    name: Offline npm package
+    needs: native-platforms
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Stage offline binaries
+        run: |
+          mkdir -p bin/linux-x64-gnu bin/win32-x64-msvc
+          cp artifacts/native-linux-x64-gnu/claude-adapter-native bin/linux-x64-gnu/
+          cp artifacts/native-win32-x64-msvc/claude-adapter-native.exe bin/win32-x64-msvc/
+          chmod +x bin/linux-x64-gnu/claude-adapter-native
+      - name: Package and clean-install
+        env:
+          CLEAN_INSTALL: '1'
+        run: npm run release:assets

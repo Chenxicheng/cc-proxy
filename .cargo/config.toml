@@ -1,0 +1,2 @@
+[build]
+target-dir = "../.cc-proxy-target"

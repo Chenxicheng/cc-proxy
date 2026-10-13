@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 3,
+  "tests": {
+    "upstream": {
+      "passed": true,
+      "status": 200,
+      "stream": true,
+      "eventCount": 3793,
+      "textDeltaCount": 1721,
+      "finishReason": "stop",
+      "inputTokens": null,
+      "outputTokens": null
+    },
+    "adapter": {
+      "passed": true,
+      "status": 200,
+      "eventTypes": [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop"
+      ],
+      "deltaTypes": [
+        "thinking_delta",
+        "text_delta"
+      ],
+      "stopReason": "end_turn",
+      "inputTokens": 33,
+      "outputTokens": 1818
+    },
+    "health": {
+      "passed": true,
+      "status": 200
+    },
+    "claudeText": {
+      "passed": false,
+      "exitCode": 0,
+      "expectedContentObserved": false,
+      "toolObserved": false,
+      "thinkingObserved": false,
+      "eventTypes": [
+        "message_start",
+        "message_delta",
+        "message_stop"
+      ],
+      "textDeltaCount": 0,
+      "textDeltaFirstMs": null,
+      "textDeltaLastMs": null,
+      "textDeltaMaxGapMs": 0,
+      "textBeforeUpstreamDone": false,
+      "emptyEndTurnObserved": true,
+      "upstreamCompletedMs": 1837,
+      "requestCount": 2,
+      "requestStream": true,
+      "requestStatus": 200,
+      "rustSent": 2,
+      "requestMatched": true,
+      "requests": [
+        {
+          "sequence": 2,
+          "outcome": "empty_end_turn",
+          "finishReasons": [
+            "stop"
+          ],
+          "textObserved": false,
+          "reasoningObserved": false,
+          "toolCallObserved": false
+        },
+        {
+          "sequence": 3,
+          "outcome": "empty_end_turn",
+          "finishReasons": [
+            "stop"
+          ],
+          "textObserved": false,
+          "reasoningObserved": false,
+          "toolCallObserved": false
+        }
+      ]
+    },
+    "assistantPrefillCapability": {
+      "passed": false,
+      "status": 200,
+      "stream": true,
+      "responseChunkCount": 3,
+      "sseEventCount": 2,
+      "doneObserved": true,
+      "finishReasons": [
+        "stop"
+      ],
+      "usage": {
+        "prompt_tokens": 10157,
+        "completion_tokens": 1,
+        "total_tokens": 10158
+      },
+      "deltaFieldCounts": {},
+      "unknownDeltaFields": [],
+      "textObserved": false,
+      "reasoningObserved": false,
+      "refusalObserved": false,
+      "toolCallObserved": false,
+      "outcome": "empty_end_turn",
+      "expectedTextObserved": true,
+      "expectedToolObserved": true
+    }
+  },
+  "model": "qwen/qwen3.6-35b-a3b",
+  "passed": false,
+  "probe": {
+    "requestCount": 3,
+    "requests": [
+      {
+        "sequence": 1,
+        "model": "qwen/qwen3.6-35b-a3b",
+        "stream": true,
+        "messageCount": 1,
+        "messageRoles": [
+          "user"
+        ],
+        "messageContentTypes": {
+          "string": 1
+        },
+        "toolCount": 0,
+        "toolChoiceType": null,
+        "maxTokenField": "max_tokens",
+        "maxTokenValue": 4096,
+        "thinkingPresent": false,
+        "status": 200,
+        "upstreamFirstByteMs": 129,
+        "upstreamCompletedMs": 20680,
+        "requestCompletedMs": 20681,
+        "responseChunkCount": 1818,
+        "sseEventCount": 1817,
+        "doneObserved": true,
+        "finishReasons": [
+          "stop"
+        ],
+        "usage": {
+          "prompt_tokens": 33,
+          "completion_tokens": 1818,
+          "total_tokens": 1851
+        },
+        "deltaFieldCounts": {
+          "role": 1,
+          "reasoning_content": 1345,
+          "content": 470
+        },
+        "unknownDeltaFields": [],
+        "textObserved": true,
+        "reasoningObserved": true,
+        "refusalObserved": false,
+        "toolCallObserved": false,
+        "outcome": "usable"
+      },
+      {
+        "sequence": 2,
+        "model": "qwen/qwen3.6-35b-a3b",
+        "stream": true,
+        "messageCount": 3,
+        "messageRoles": [
+          "system",
+          "user",
+          "assistant"
+        ],
+        "messageContentTypes": {
+          "string": 2,
+          "text": 2
+        },
+        "toolCount": 12,
+        "toolChoiceType": null,
+        "maxTokenField": "max_tokens",
+        "maxTokenValue": 32000,
+        "thinkingPresent": true,
+        "status": 200,
+        "upstreamFirstByteMs": 7680,
+        "upstreamCompletedMs": 7681,
+        "requestCompletedMs": 7681,
+        "responseChunkCount": 3,
+        "sseEventCount": 2,
+        "doneObserved": true,
+        "finishReasons": [
+          "stop"
+        ],
+        "usage": {
+          "prompt_tokens": 10138,
+          "completion_tokens": 1,
+          "total_tokens": 10139
+        },
+        "deltaFieldCounts": {},
+        "unknownDeltaFields": [],
+        "textObserved": false,
+        "reasoningObserved": false,
+        "refusalObserved": false,
+        "toolCallObserved": false,
+        "outcome": "empty_end_turn"
+      },
+      {
+        "sequence": 3,
+        "model": "qwen/qwen3.6-35b-a3b",
+        "stream": true,
+        "messageCount": 3,
+        "messageRoles": [
+          "system",
+          "user",
+          "assistant"
+        ],
+        "messageContentTypes": {
+          "string": 2,
+          "text": 3
+        },
+        "toolCount": 12,
+        "toolChoiceType": null,
+        "maxTokenField": "max_tokens",
+        "maxTokenValue": 32000,
+        "thinkingPresent": true,
+        "status": 200,
+        "upstreamFirstByteMs": 1836,
+        "upstreamCompletedMs": 1837,
+        "requestCompletedMs": 1837,
+        "responseChunkCount": 3,
+        "sseEventCount": 2,
+        "doneObserved": true,
+        "finishReasons": [
+          "stop"
+        ],
+        "usage": {
+          "prompt_tokens": 10157,
+          "completion_tokens": 1,
+          "total_tokens": 10158
+        },
+        "deltaFieldCounts": {},
+        "unknownDeltaFields": [],
+        "textObserved": false,
+        "reasoningObserved": false,
+        "refusalObserved": false,
+        "toolCallObserved": false,
+        "outcome": "empty_end_turn"
+      }
+    ]
+  }
+}

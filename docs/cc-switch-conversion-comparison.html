@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cc-switch 与 claude-adapter：Request / Response 转换对比</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.65; }
+    body { max-width: 1160px; margin: 0 auto; padding: 30px 22px 70px; color: light-dark(#17212b, #e7edf3); background: light-dark(#f6f8fb, #111820); }
+    h1 { font-size: clamp(1.7rem, 3vw, 2.5rem); line-height: 1.3; margin: 0 0 12px; }
+    h2 { font-size: 1.2rem; margin: 32px 0 12px; }
+    p { margin: 8px 0; }
+    a { color: light-dark(#155bb6, #8fbdff); }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .93em; }
+    .lead, .note { color: light-dark(#485766, #adbac8); }
+    .summary { background: light-dark(#eaf2ff, #1a3048); border-left: 4px solid #568cdd; border-radius: 10px; padding: 16px 20px; margin: 24px 0; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { background: light-dark(#fff, #1b2631); border: 1px solid light-dark(#dce4eb, #344453); border-radius: 12px; padding: 15px 18px; }
+    .card h3 { margin: 0 0 6px; font-size: 1rem; }
+    .card ul { padding-left: 20px; margin: 7px 0 0; }
+    .table-wrap { overflow-x: auto; background: light-dark(#fff, #1b2631); border: 1px solid light-dark(#dce4eb, #344453); border-radius: 12px; }
+    table { border-collapse: collapse; width: 100%; min-width: 770px; }
+    th, td { text-align: left; vertical-align: top; padding: 12px 15px; border-bottom: 1px solid light-dark(#e5ebf1, #344453); }
+    th { background: light-dark(#edf3f8, #243443); }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { font-weight: 650; width: 15%; }
+    td:nth-child(2), td:nth-child(3) { width: 34%; }
+    .tag { display: inline-block; font-size: .76rem; font-weight: 700; border-radius: 99px; padding: 1px 8px; margin-bottom: 4px; background: light-dark(#e4edfa, #304763); }
+    .risk { background: light-dark(#ffeedb, #5a3b20); }
+    ol { padding-left: 23px; }
+    li { margin: 5px 0; }
+    .sources li { overflow-wrap: anywhere; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } body { padding: 20px 14px 50px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>cc-switch 与 claude-adapter<br>Request / Response 转换对比</h1>
+    <p class="lead">代码快照：cc-switch <code>f2537fd</code>；本项目 <code>63a66b6</code> 加当前工作区修改。范围：Claude Code 的 Anthropic Messages 请求，经 OpenAI Chat Completions 或 Responses 上游，再转换回 Anthropic 响应。2026-09-23。</p>
+
+    <div class="summary"><strong>结论：</strong>cc-switch 胜在协议覆盖、多模态与供应商适配；本项目胜在 Chat Completions 单一路径的输入校验、失败可见性和流终止约束。若只评估共同的 Chat 流式转换，我更推荐本项目的处理方式；两者没有同条件性能实测，不能给出速度排名。</div>
+
+    <div class="grid" aria-label="双方主要优点与不足">
+      <section class="card"><h3>cc-switch</h3><span class="tag">主要优点</span><ul><li>同一 Claude 入口支持 Chat Completions、Responses、Gemini 等格式；Responses 路径处理 reasoning 回传和 hosted tools。</li><li>Chat 路径支持普通图片，并把 <code>tool_result</code> 图片转成后续 user 消息；工具 schema 会做上游兼容清理。</li><li>流式 usage 等待末尾统计，处理重复 <code>finish_reason</code>；客户端 usage 可拆分缓存 token。</li></ul><span class="tag risk">主要不足</span><ul><li>Chat 非流式工具参数 JSON 解析失败会回退为 <code>{}</code>；未知结束原因回退为 <code>end_turn</code>，可能隐藏上游协议问题。</li><li>覆盖多个协议和供应商，使转换行为依赖路由与 provider 选项，定位问题需要跟踪更多分支。</li></ul></section>
+      <section class="card"><h3>claude-adapter</h3><span class="tag">主要优点</span><ul><li>Request 先校验必需字段和内容结构；Response 对 malformed tool arguments、缺失 tool name、未知结束原因返回明确错误。</li><li>SSE 对并行工具、分片名称、完整 JSON 参数、结束信号建立明确约束；错误流不会再发送成功结束事件。</li><li>遵守旧版 TypeScript 的 Chat 请求 wire shape，并保留 GLM/Qwen 的已选参数，行为边界容易验证。</li></ul><span class="tag risk">主要不足</span><ul><li>只支持 Anthropic Messages ↔ Chat Completions；图片及工具结果图片直接返回 400。</li><li>不清理工具 JSON schema；客户端 usage 只返回 input/output，总缓存明细保留在内部 JSONL。</li></ul></section>
+    </div>
+
+    <h2>逐项比较</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>转换点</th><th>cc-switch：优势与代价</th><th>本项目：优势与代价</th><th>对用户的影响</th></tr></thead>
+      <tbody>
+        <tr><td>协议与模型参数</td><td>按 provider 走 Chat、Responses 或其他转换；Responses 能映射 <code>reasoning.effort</code>，并处理无状态 reasoning 回传。路由与选项更多。<a href="#s1">[1]</a><a href="#s2">[2]</a></td><td>只生成 Chat Completions；针对 GPT/o-series、GLM、Qwen 映射 <code>max_tokens</code>、<code>thinking</code>、<code>reasoning_effort</code>。不能直接接仅支持 Responses 的上游。<a href="#s5">[5]</a></td><td>选模型更灵活时 cc-switch 有利；上游限定为 Chat 时，本项目的协议边界更清楚。</td></tr>
+        <tr><td>Request 校验</td><td>Chat 转换对缺失 <code>model</code>、<code>messages</code>、<code>max_tokens</code> 多处采用跳过或默认；可容纳宽松输入，但错误可能延迟到上游。<a href="#s1">[1]</a></td><td>校验必需字段、数值范围及块结构，图片明确拒绝；不支持的字段大多不转发。<a href="#s5">[5]</a></td><td>本项目更快指出请求结构问题；cc-switch 对非标准网关较宽容。</td></tr>
+        <tr><td>消息、图片与工具结果</td><td>支持图片 URL/base64；Chat 无法在 tool 消息中放图片时，将图片移至后续 user 消息。可用性更强，但消息角色与原始顺序语义可能变化。<a href="#s1">[1]</a></td><td>文本与工具结果按既有 TypeScript 路径转换；图片返回 400，避免静默丢失但阻断视觉任务。<a href="#s5">[5]</a><a href="#s7">[7]</a></td><td>需要截图或图像工具结果的 Claude Code 工作流，目前应优先考虑 cc-switch。</td></tr>
+        <tr><td>Tools 与 schema</td><td>过滤特定内部工具、补齐根 object schema 并移除 <code>format: uri</code>；更易通过挑剔的上游，但转换后的 schema 不再完全等同输入。<a href="#s1">[1]</a></td><td>只映射 <code>name</code>、<code>description</code>、<code>input_schema</code>，不做 schema 修正；形状可预测，上游不接受 schema 时需显式修复。<a href="#s5">[5]</a></td><td>cc-switch 接入面更广；本项目更方便确认实际发送了什么。</td></tr>
+        <tr><td>非流式 Response</td><td>支持文本、reasoning、tool calls、旧式 <code>function_call</code>；但 malformed arguments 可退化成空对象，未知 <code>finish_reason</code> 可映射为成功结束。<a href="#s1">[1]</a></td><td>严格检查 assistant、单个 choice、tool name/arguments 与 finish reason；不符合契约返回 502。拒绝响应另有 <code>refusal</code> 标识。<a href="#s6">[6]</a></td><td>本项目减少“工具实际坏了却显示成功”的风险；cc-switch 对格式不规范的上游容忍度较高。</td></tr>
+        <tr><td>流式 Response / SSE</td><td>按上游 index 聚合并行工具，缓存结束事件等待最终 usage，允许重复 finish reason；Chat 路径的未知 finish reason 仍降级为 <code>end_turn</code>，工具参数片段未在结束前做完整 JSON 校验。<a href="#s3">[3]</a></td><td>校验完整工具参数和结束信号；不完整 SSE 或传输错误发 error，不发成功终止事件。对非标准流容忍度较低。<a href="#s7">[7]</a></td><td>本项目更适合要求工具结果可追责的场景；cc-switch 更适合格式参差的网关。</td></tr>
+        <tr><td>Usage / 缓存</td><td>在 Anthropic 响应中拆分缓存读写 token，避免把缓存命中重复算作新输入；流式等待尾部 usage。<a href="#s1">[1]</a><a href="#s3">[3]</a></td><td>客户端 usage 只映射 input/output；内部 JSONL 保留 cache/reasoning 明细，缺失客户端计数默认 0。<a href="#s6">[6]</a><a href="#s8">[8]</a></td><td>cc-switch 对客户端侧 token 展示更完整；本项目需要查内部记录才能核对缓存。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2>流式返回专项：哪个更好？</h2>
+    <p><strong>共同的 Claude → OpenAI Chat → Claude 场景：本项目的协议正确性更好。</strong>它检查每个 SSE JSON、工具参数完整性和成功终止条件；cc-switch 对重复结束事件及末尾 usage 更宽容，但 Chat 路径会跳过无法反序列化的 chunk，并把未知 <code>finish_reason</code> 当成 <code>end_turn</code>。如果比较“可接多少种上游”，cc-switch 更强；如果比较“同一流是否会把坏结果报成成功”，本项目更稳。<a href="#s3">[3]</a><a href="#s7">[7]</a></p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>流式处理点</th><th>cc-switch Chat 路径</th><th>本项目 Chat 路径</th><th>判断</th></tr></thead>
+      <tbody>
+        <tr><td>首个内容与背压</td><td>从 <code>bytes_stream()</code> 逐块读，转换事件后立即 <code>yield</code>；正常情况下无需等完整响应。原生 Anthropic 路径还能直接透传。<a href="#s3">[3]</a><a href="#s4">[4]</a></td><td><code>bytes_stream() → eventsource → Axum SSE</code>；逐事件输出，慢下游通过轮询链路限制继续读取上游；有首内容提前送达测试。<a href="#s7">[7]</a></td><td>两者都是增量处理；源码不足以证明谁的首 token 更快。原生透传是 cc-switch 的额外优势。</td></tr>
+        <tr><td>SSE 解析与开销</td><td>字节先拼入 UTF-8 <code>String</code>，查找块分隔符并 <code>drain</code>，再解析为类型化 chunk；每个下游事件单独格式化。大块、高频事件可能增加扫描和拷贝，属于源码推断。<a href="#s3">[3]</a><a href="#s4">[4]</a></td><td>使用 <code>eventsource-stream</code> 做帧解析，再转为 <code>serde_json::Value</code>、构造事件 <code>Vec</code> 并序列化；这些步骤同样有分配开销。<a href="#s7">[7]</a></td><td>不能凭代码行数或解析库选择推断吞吐。优化前应测 CPU、分配量、p95 和首内容延迟。</td></tr>
+        <tr><td>工具调用</td><td>用上游 index 维护并行工具；支持先收到 arguments、后收到 ID/name，并在 finish 时补发块。没有看到 Chat 路径在成功结束前验证参数是完整 JSON 对象。<a href="#s3">[3]</a></td><td>也按 index 处理并行工具；工具名分片时仅等待名称可判定，参数在关闭块前解析并检查必须为 JSON 对象。<a href="#s7">[7]</a></td><td>本项目更早发现不可执行的工具调用；cc-switch 对缺字段上游更有容错能力。</td></tr>
+        <tr><td>结束与错误</td><td>缓存一个 <code>message_delta</code> 等 usage，容忍重复 finish；自然 EOF 且已有 pending delta 可正常结束。无法反序列化的 Chat chunk 会被跳过。<a href="#s3">[3]</a></td><td>同样等尾部 usage、容忍相同 finish；EOF 缺终止信号、相冲突的 finish、完成后新增内容或坏工具参数都会输出 error，不发送成功终止。<a href="#s7">[7]</a></td><td>本项目的失败语义更可靠；cc-switch 对非标准流完成方式更宽容。</td></tr>
+        <tr><td>功能广度</td><td>另有 Responses SSE 状态机、web search 和 reasoning 转换；需要更多状态、缓冲和测试。<a href="#s9">[9]</a></td><td>仅 Chat Completions SSE，范围集中。<a href="#s7">[7]</a></td><td>多供应商使用 cc-switch 更方便；单一 Chat 路径更适合本项目当前目标。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2>性能证据与可执行的比较方法</h2>
+    <p><strong>已测量，但不是 cc-switch 对比：</strong>本项目历史基准使用同机、release 构建、确定性本地 mock upstream、预热后 5 次中位数。流式并发 50 时，Rust 为 8658.75 请求/秒、p95 7.68 ms，旧 Node 为 3742.50 请求/秒、p95 14.60 ms；并发 100 时分别为 9034.03 / 14.30 ms 和 4515.07 / 23.23 ms。并发 1 时 Rust 为 419.22 请求/秒，低于 Node 的 559.25。该结果只说明 2026-09-19 的 Rust 与旧 Node 比较，不代表当前代码与 cc-switch 的差距，也不代表真实模型延迟。<a href="#s10">[10]</a></p>
+    <p><strong>性能排名：目前无法判定。</strong>要回答“哪个更快”，应固定同一台机器、同一 mock 上游、同一 Chat 请求和 SSE 分块，分别运行两边 release 二进制；覆盖短文本、长文本、并行工具、慢读取和断连，在并发 1/10/50/100 下记录首内容延迟、吞吐、p95/p99、CPU、RSS、错误数。Responses 和原生透传需另列场景，不能混入共同 Chat 路径。若结果表明本项目的事件分配是瓶颈，再针对该热点优化；目前没有依据为性能而移植 cc-switch 的手写 SSE 解析。<a href="#s11">[11]</a></p>
+
+    <h2>建议优先级</h2>
+    <ol>
+      <li><strong>先补图片输入：</strong>这是当前项目最明确的用户功能缺口；需要定义 <code>tool_result</code> 图片的角色与顺序语义，然后用真实上游验收。</li>
+      <li><strong>按上游故障证据决定 schema 清理：</strong>借鉴 cc-switch 的具体规则，不要无条件改写工具 schema。</li>
+      <li><strong>只有目标上游确需 Responses 时再扩协议：</strong>这会新增独立的 Request、Response、SSE 契约，不能当作几个字段的补丁。</li>
+      <li><strong>保留严格错误边界：</strong>不照搬 malformed arguments → <code>{}</code> 或未知结束原因 → <code>end_turn</code> 的成功回退。</li>
+    </ol>
+
+    <h2>证据与边界</h2>
+    <p class="note">这是静态源码对比，没有运行 cc-switch 与本项目的同条件端到端或性能测试。上面的数字来自本项目 Rust 与旧 Node 的历史 mock 基准。cc-switch 的 Chat、Responses 与原生透传分支行为不同；表格在相关行明确标明分支。</p>
+    <ol class="sources">
+      <li id="s1"><a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/providers/transform.rs">cc-switch Chat Request / Response 转换</a></li>
+      <li id="s2"><a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/providers/transform_responses.rs">cc-switch Responses Request / Response 转换</a></li>
+      <li id="s3"><a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/providers/streaming.rs">cc-switch Chat SSE 转换</a></li>
+      <li id="s4"><a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/sse.rs">cc-switch SSE 分帧辅助函数</a>；<a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/response_processor.rs">原生流透传</a></li>
+      <li id="s5"><a href="../native/src/converter.rs">本项目 Request 转换与校验</a></li>
+      <li id="s6"><a href="../native/src/converter.rs#L728">本项目非流式 Response 转换</a></li>
+      <li id="s7"><a href="../native/src/stream.rs">本项目 SSE 转换</a></li>
+      <li id="s8"><a href="API.md">本项目 API 契约</a></li>
+      <li id="s9"><a href="https://github.com/farion1231/cc-switch/blob/f2537fd/src-tauri/src/proxy/providers/streaming_responses.rs">cc-switch Responses SSE 转换</a></li>
+      <li id="s10"><a href="../bench/baseline-2026-09-19.json">本项目历史 Node / Rust mock 基准原始结果</a></li>
+      <li id="s11"><a href="../bench/benchmark.mjs">本项目 benchmark harness</a></li>
+    </ol>
+  </main>
+</body>
+</html>

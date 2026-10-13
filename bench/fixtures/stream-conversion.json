@@ -1,0 +1,150 @@
+{
+  "chunks": [
+    {
+      "model": "mock-model",
+      "choices": [
+        {
+          "delta": {
+            "reasoning_content": "think"
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "answer"
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "choices": [],
+      "usage": {
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "total_tokens": 7,
+        "completion_tokens_details": {
+          "reasoning_tokens": 2
+        }
+      }
+    }
+  ],
+  "toolChunks": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "toolu_1",
+                "type": "function",
+                "function": {
+                  "name": "look",
+                  "arguments": "{\"id\":"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "function": {
+                  "name": "up",
+                  "arguments": "1}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "function": {
+                  "name": "lookup",
+                  "arguments": ""
+                }
+              }
+            ]
+          },
+          "finish_reason": "tool_calls"
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "tool_calls"
+        }
+      ]
+    }
+  ],
+  "toolEventTypes": [
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop"
+  ],
+  "toolChunkEventCounts": [
+    1,
+    2,
+    1,
+    0
+  ],
+  "eventTypes": [
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop"
+  ],
+  "deltaTypes": [
+    "thinking_delta",
+    "text_delta"
+  ],
+  "initialUsage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "finalUsage": {
+    "input_tokens": 3,
+    "output_tokens": 4
+  },
+  "toolNames": [
+    "lookup"
+  ]
+}
