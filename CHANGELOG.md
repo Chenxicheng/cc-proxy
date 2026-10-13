@@ -6,6 +6,12 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- Show a fullscreen terminal after startup with a fixed service/model summary and scrollable send/response logs. Support keyboard scrolling, live following, resize, bounded history, terminal restoration, and plain output when redirected.
+
 ## [2.2.0] — 2026-10-12
 
 ### Added

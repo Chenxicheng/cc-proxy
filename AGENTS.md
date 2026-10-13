@@ -8,6 +8,8 @@
 
 `src/cli.ts` 是 npm CLI 入口，只负责配置交互、选择并启动内置 Rust 二进制、进程信号与错误反馈。`native/` 是完整代理服务，负责 HTTP、协议转换、SSE、usage/error JSONL 和运行时日志。Rust 生产代码只放在 `native/src/`：`server/` 负责启动、路由、handlers 和 upstream HTTP，`protocol/` 负责请求、响应与 SSE 转换，根级 `config.rs`、`error.rs`、`storage.rs` 保存明确的跨域能力；禁止新增语义模糊的 `common`、`shared` 或 `utils` 模块。Rust 白盒单元测试按生产模块路径镜像放在 `native/tests/unit/`，由对应模块通过 `#[cfg(test)]` 和 `#[path]` 引入；进程外集成测试直接放在 `native/tests/*.rs`。发布时将 Linux x64 与 Windows x64 二进制暂存到 `bin/<target>/`，并与 CLI 一起打入唯一的离线 npm 包；`bin/` 是生成目录，不提交。Node 不代理请求，也不提供 Rust 服务的 fallback。根级 `tests/` 保存 CLI 与离线分发测试；`tests/real-e2e/` 保存手动触发的真实 upstream 验收脚本和脱敏结果。`bench/` 保存确定性 mock upstream、fixtures 和 benchmark harness。`docs/` 保存 API、迁移规格与验收说明。
 
+启动后的 fullscreen 展示由 `src/terminal.ts` 负责，只消费 Rust 运行日志。修改终端交互时查阅 `docs/terminal.md`；历史必须有界，退出必须恢复终端、光标与输入模式。
+
 ## 构建、测试与开发命令
 
 - `npm install`：安装依赖；要求 Node.js `>=20.0.0`。

@@ -103,6 +103,28 @@ describe('native process lifecycle', () => {
     Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
   });
 
+  it('routes native output to the terminal without leaking ready records or splitting UTF-8', async () => {
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    const output = jest.fn();
+    const starting = startNativeServer('/tmp/config.json', 3080, output);
+    child.stdout.write('CC_PROXY_READY={"url":"http://localhost:3080"}\n');
+    const server = await starting;
+    const bytes = Buffer.from('-> 模型 [sent] request-1\n');
+    child.stderr.write(bytes.subarray(0, 4));
+    child.stderr.write(bytes.subarray(4));
+    child.stdout.write('runtime notice\n');
+    expect(
+      output.mock.calls
+        .filter(([, stream]) => stream === 'stderr')
+        .map(([chunk]) => chunk)
+        .join('')
+    ).toBe('-> 模型 [sent] request-1\n');
+    expect(output).toHaveBeenCalledWith('runtime notice\n', 'stdout');
+    expect(output.mock.calls.some(([chunk]) => chunk.includes('CC_PROXY_READY'))).toBe(false);
+    await server.stop();
+  });
+
   it('accepts one ready record and clears the shutdown timeout after a fast exit', async () => {
     jest.useFakeTimers();
     const child = createFakeChild();

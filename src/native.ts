@@ -61,7 +61,11 @@ export function resolveNativeBinary(): string {
   );
 }
 
-export async function startNativeServer(configPath: string, port: number): Promise<NativeServer> {
+export async function startNativeServer(
+  configPath: string,
+  port: number,
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void
+): Promise<NativeServer> {
   const binary = resolveNativeBinary();
   const windowsStdinShutdown = process.platform === 'win32';
   const env = { ...process.env };
@@ -72,7 +76,12 @@ export async function startNativeServer(configPath: string, port: number): Promi
     windowsHide: true,
     env,
   });
-  child.stderr?.pipe(process.stderr);
+  if (onOutput) {
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => onOutput(chunk, 'stderr'));
+  } else {
+    child.stderr?.pipe(process.stderr);
+  }
 
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolveExit) => {
@@ -82,7 +91,7 @@ export async function startNativeServer(configPath: string, port: number): Promi
   );
   let url: string;
   try {
-    url = await waitForReady(child, exited);
+    url = await waitForReady(child, exited, onOutput);
   } catch (error) {
     await stopChild(child, exited, 'SIGTERM');
     throw error;
@@ -95,7 +104,11 @@ export async function startNativeServer(configPath: string, port: number): Promi
   };
 }
 
-function waitForReady(child: ChildProcess, exited: NativeServer['exited']): Promise<string> {
+function waitForReady(
+  child: ChildProcess,
+  exited: NativeServer['exited'],
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void
+): Promise<string> {
   return new Promise((resolveReady, reject) => {
     let output = '';
     let settled = false;
@@ -115,7 +128,8 @@ function waitForReady(child: ChildProcess, exited: NativeServer['exited']): Prom
     child.once('error', (error) =>
       finish(new Error(`Failed to start native proxy: ${error.message}`))
     );
-    child.stdout?.on('data', (chunk) => {
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
       output += chunk.toString();
       let newline = output.indexOf('\n');
       while (newline >= 0) {
@@ -130,7 +144,8 @@ function waitForReady(child: ChildProcess, exited: NativeServer['exited']): Prom
             finish(new Error(`Invalid native ready record: ${(error as Error).message}`));
           }
         } else if (line) {
-          process.stdout.write(`${line}\n`);
+          if (onOutput) onOutput(`${line}\n`, 'stdout');
+          else process.stdout.write(`${line}\n`);
         }
         newline = output.indexOf('\n');
       }

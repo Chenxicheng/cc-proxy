@@ -11,7 +11,8 @@ import {
   updateClaudeJson,
   updateClaudeSettings,
 } from './utils/config';
-import { startNativeServer } from './native';
+import { NativeServer, startNativeServer } from './native';
+import { TerminalMonitor } from './terminal';
 import { UI } from './utils/ui';
 import { checkForUpdates } from './utils/update';
 import { getMetadata } from './utils/metadata';
@@ -34,6 +35,8 @@ program
     UI.banner();
     UI.header('Adapt any model for Claude Code');
 
+    let terminal: TerminalMonitor | undefined;
+    let cleanupServer: NativeServer | undefined;
     try {
       // Initialize metadata (creates metadata.json on first run)
       getMetadata();
@@ -60,7 +63,13 @@ program
 
       // Step 3: Start the native proxy; it atomically selects an available port.
       const preferredPort = parseInt(options.port, 10) || 3080;
-      const server = await startNativeServer(join(getConfigDir(), 'config.json'), preferredPort);
+      terminal = new TerminalMonitor(config.models, version, () => process.emit('SIGINT'));
+      const server = await startNativeServer(
+        join(getConfigDir(), 'config.json'),
+        preferredPort,
+        terminal.write
+      );
+      cleanupServer = server;
       const proxyUrl = server.url;
       UI.statusDone(true, `cc-proxy running at ${UI.newUrl(proxyUrl)}`);
 
@@ -84,18 +93,11 @@ program
       UI.info('Open a new terminal tab and run Claude Code.');
       UI.hint('Press Ctrl+C to stop the proxy server.');
 
-      // Non-blocking update check
-      checkForUpdates().then((update) => {
-        if (update?.hasUpdate) {
-          UI.updateNotify(update.current, update.latest);
-        }
-        UI.log('');
-      });
-
       let shuttingDown = false;
       const shutdown = async (signal: NodeJS.Signals) => {
         if (shuttingDown) return;
         shuttingDown = true;
+        terminal?.stop();
         UI.log('');
         await server.stop(signal);
         UI.success('cc-proxy stopped');
@@ -105,10 +107,29 @@ program
       process.once('SIGTERM', () => void shutdown('SIGTERM'));
       server.exited.then(({ code, signal }) => {
         if (shuttingDown) return;
+        terminal?.stop();
         UI.error(`Native proxy stopped unexpectedly (code=${code}, signal=${signal})`);
         process.exit(code ?? 1);
       });
+      const fullscreen = terminal.start(proxyUrl);
+      if (fullscreen && !options.claudeSettings) {
+        terminal.write(
+          `Manual setup: set ANTHROPIC_BASE_URL=${proxyUrl} in Claude Code settings\n`
+        );
+      }
+
+      // Keep asynchronous notifications inside the fullscreen log pane.
+      checkForUpdates().then((update) => {
+        if (!update?.hasUpdate || shuttingDown) return;
+        if (fullscreen) {
+          terminal?.write(`Update ${update.current} -> ${update.latest}: npm i -g cc-proxy\n`);
+        } else {
+          UI.updateNotify(update.current, update.latest);
+        }
+      });
     } catch (error) {
+      terminal?.stop();
+      await cleanupServer?.stop();
       UI.statusDone(false, 'An error occurred');
       UI.error('Setup failed', error as Error);
       process.exit(1);
