@@ -12,7 +12,10 @@ use serde_json::{Value, json};
 
 use crate::{
     error::AppError,
-    protocol::{convert_request_with_mode, convert_response, transform_stream, validate_request},
+    protocol::{
+        convert_request_with_mode, convert_response, convert_usage, record_usage_metadata,
+        transform_stream, validate_request,
+    },
 };
 
 use super::{
@@ -101,6 +104,17 @@ async fn handle_messages(
         &state.config.base_url,
         state.config.upstream_capabilities.assistant_prefill,
     )?;
+    let tool_names = openai
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| {
+            tool.pointer("/function/name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
     eprintln!("-> {model} [sent] {request_id}");
     let request = state
         .client
@@ -127,17 +141,7 @@ async fn handle_messages(
             state.storage.clone(),
             request_id.to_owned(),
             headers_received_at,
-            openai
-                .get("tools")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|tool| {
-                    tool.pointer("/function/name")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .collect(),
+            tool_names,
         );
         let response = Response::builder()
             .status(StatusCode::OK)
@@ -155,31 +159,30 @@ async fn handle_messages(
         .json()
         .await
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
-    let converted = convert_response(&openai_response, model)?;
-    let has_usage = openai_response
-        .get("usage")
-        .is_some_and(is_non_empty_object);
+    let converted = convert_response(&openai_response, model, &tool_names)?;
+    let usage = convert_usage(openai_response.get("usage"));
     let empty_end_turn = converted["stop_reason"] == "end_turn"
         && converted["content"].as_array().is_some_and(Vec::is_empty);
-    if has_usage || empty_end_turn {
-        let mut record = json!({
-            "timestamp": now(),
-            "requestId": request_id,
-            "schemaVersion": 2,
-            "provider": state.config.base_url,
-            "modelName": model,
-            "streaming": false,
-            "usageStatus": if has_usage { "complete" } else { "missing" },
-            "outcome": if empty_end_turn { "empty_end_turn" } else { "usable" },
-        });
-        if has_usage {
-            record["usage"] = openai_response["usage"].clone();
-        }
-        if let Some(actual_model) = openai_response.get("model") {
-            record["model"] = actual_model.clone();
-        }
-        state.storage.record_usage(record);
+    let mut record = json!({
+        "timestamp": now(),
+        "requestId": request_id,
+        "schemaVersion": 2,
+        "provider": state.config.base_url,
+        "modelName": model,
+        "streaming": false,
+        "outcome": if empty_end_turn { "empty_end_turn" } else { "usable" },
+    });
+    record_usage_metadata(&mut record, &usage);
+    if let Some(raw_usage) = openai_response
+        .get("usage")
+        .filter(|usage| !usage.is_null())
+    {
+        record["usage"] = raw_usage.clone();
     }
+    if let Some(actual_model) = openai_response.get("model") {
+        record["model"] = actual_model.clone();
+    }
+    state.storage.record_usage(record);
     eprintln!("<- {model} [received] {request_id}");
     Ok(Json(converted).into_response())
 }
@@ -238,10 +241,6 @@ fn error_record_value(
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn is_non_empty_object(value: &Value) -> bool {
-    value.as_object().is_some_and(|object| !object.is_empty())
 }
 
 fn request_id() -> String {

@@ -337,21 +337,24 @@
     }
   },
   {
-    "name": "tool result fallback and thinking history follow TypeScript mapping",
+    "name": "tool result matches preceding tool and ignores generic thinking history",
     "input": {
       "model": "gpt-4",
       "max_tokens": 10,
       "messages": [
         {
           "role": "assistant",
-          "content": [{ "type": "thinking", "thinking": "private", "signature": "sig" }]
+          "content": [
+            { "type": "thinking", "thinking": "private", "signature": "sig" },
+            { "type": "tool_use", "id": "toolu_matched", "name": "lookup", "input": {} }
+          ]
         },
         {
           "role": "user",
           "content": [
             {
               "type": "tool_result",
-              "tool_use_id": "unmatched",
+              "tool_use_id": "toolu_matched",
               "content": [
                 { "type": "text", "text": "one" },
                 { "type": "text", "text": "two" }
@@ -366,8 +369,16 @@
     "expected": {
       "model": "gpt-4",
       "messages": [
-        { "role": "assistant", "content": null },
-        { "role": "tool", "tool_call_id": "unmatched", "content": "Error: one\ntwo" },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [{
+            "id": "toolu_matched",
+            "type": "function",
+            "function": { "name": "lookup", "arguments": "{}" }
+          }]
+        },
+        { "role": "tool", "tool_call_id": "toolu_matched", "content": "Error: one\ntwo" },
         { "role": "user", "content": "continue" }
       ],
       "stream": false,

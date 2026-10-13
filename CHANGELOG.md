@@ -15,6 +15,11 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 - Log validated streaming completion and mirror request/response failures to the fullscreen terminal. Persist early request rejections and attach request IDs to usage records.
 - Show a fullscreen terminal after startup with a fixed service/model summary and scrollable send/response logs. Support keyboard scrolling, live following, resize, bounded history, terminal restoration, and plain output when redirected.
 
+### Fixed
+
+- Split Chat Completions prompt usage into uncached, cache-read, and cache-write tokens consistently for JSON and SSE while preserving answers when usage statistics are incomplete or invalid.
+- Reject malformed request collections, orphaned tool results, undeclared response tools, audio, and annotations consistently; preserve streamed reasoning that follows tool calls.
+
 ## [2.2.0] — 2026-10-12
 
 ### Added

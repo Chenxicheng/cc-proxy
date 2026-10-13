@@ -4,9 +4,16 @@ use serde_json::{Value, json};
 
 use crate::error::AppError;
 
-use super::request::{IdContext, unique_tool_id};
+use super::{
+    request::{IdContext, unique_tool_id},
+    usage::convert_usage,
+};
 
-pub fn convert_response(response: &Value, original_model: &str) -> Result<Value, AppError> {
+pub fn convert_response(
+    response: &Value,
+    original_model: &str,
+    declared_tools: &[String],
+) -> Result<Value, AppError> {
     let choices = response
         .get("choices")
         .and_then(Value::as_array)
@@ -119,6 +126,11 @@ pub fn convert_response(response: &Value, original_model: &str) -> Result<Value,
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| upstream_protocol_error("tool call is missing function.name"))?;
+            if !declared_tools.iter().any(|declared| declared == name) {
+                return Err(upstream_protocol_error(format!(
+                    "tool call function.name {name:?} was not declared in the request"
+                )));
+            }
             if call
                 .get("id")
                 .is_some_and(|id| !id.is_null() && !id.is_string())
@@ -163,7 +175,7 @@ pub fn convert_response(response: &Value, original_model: &str) -> Result<Value,
     } else {
         Value::Null
     };
-    let usage = response_usage(response.get("usage"))?;
+    let usage = convert_usage(response.get("usage")).client;
     let id = match response.get("id") {
         Some(Value::String(id)) if !id.is_empty() => format!("msg_{id}"),
         None | Some(Value::Null) | Some(Value::String(_)) => generated_message_id(),
@@ -201,26 +213,6 @@ pub(super) fn map_finish_reason(reason: &str) -> Result<&'static str, AppError> 
             "unknown upstream finish reason: {other}"
         ))),
     }
-}
-
-fn response_usage(usage: Option<&Value>) -> Result<Value, AppError> {
-    let usage = match usage {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(usage)) => Some(usage),
-        Some(_) => return Err(upstream_protocol_error("response usage must be an object")),
-    };
-    let token = |field: &str| -> Result<Value, AppError> {
-        match usage.and_then(|usage| usage.get(field)) {
-            None | Some(Value::Null) => Ok(json!(0)),
-            Some(value) => value.as_u64().map(Value::from).ok_or_else(|| {
-                upstream_protocol_error(format!("response usage.{field} must be an integer"))
-            }),
-        }
-    };
-    Ok(json!({
-        "input_tokens": token("prompt_tokens")?,
-        "output_tokens": token("completion_tokens")?,
-    }))
 }
 
 fn generated_message_id() -> String {

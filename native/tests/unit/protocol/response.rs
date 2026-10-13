@@ -1,5 +1,9 @@
 use super::*;
 
+fn convert(response: &Value, model: &str) -> Result<Value, AppError> {
+    super::convert_response(response, model, &["lookup".to_owned()])
+}
+
 #[test]
 fn matches_shared_response_fixtures() {
     let fixtures: Value = serde_json::from_str(include_str!(
@@ -7,8 +11,7 @@ fn matches_shared_response_fixtures() {
     ))
     .unwrap();
     for fixture in fixtures.as_array().unwrap() {
-        let actual =
-            convert_response(&fixture["input"], fixture["model"].as_str().unwrap()).unwrap();
+        let actual = convert(&fixture["input"], fixture["model"].as_str().unwrap()).unwrap();
         assert_eq!(actual, fixture["expected"], "fixture {}", fixture["name"]);
     }
 }
@@ -26,6 +29,7 @@ fn maps_finish_reasons_and_current_usage_shape() {
             "usage": {
                 "prompt_tokens": 11,
                 "completion_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 2},
                 "completion_tokens_details": {"reasoning_tokens": 3}
             }
         });
@@ -40,14 +44,15 @@ fn maps_finish_reasons_and_current_usage_shape() {
                 }]
             });
         }
-        let converted = convert_response(&response, "model").unwrap();
+        let converted = convert(&response, "model").unwrap();
         assert_eq!(converted["stop_reason"], expected);
         assert_eq!(converted["stop_details"], Value::Null);
         assert_eq!(converted["container"], Value::Null);
-        assert_eq!(converted["usage"]["input_tokens"], 11);
+        assert_eq!(converted["usage"]["input_tokens"], 5);
         assert_eq!(converted["usage"]["output_tokens"], 7);
+        assert_eq!(converted["usage"]["cache_read_input_tokens"], 4);
+        assert_eq!(converted["usage"]["cache_creation_input_tokens"], 2);
         assert!(converted["usage"].get("output_tokens_details").is_none());
-        assert_eq!(converted["usage"]["cache_read_input_tokens"], Value::Null);
     }
 }
 
@@ -61,7 +66,7 @@ fn preserves_legal_empty_end_turn() {
         }],
         "usage": {"prompt_tokens": 5, "completion_tokens": 3}
     });
-    let converted = convert_response(&response, "model").unwrap();
+    let converted = convert(&response, "model").unwrap();
     assert_eq!(converted["content"], json!([]));
     assert_eq!(converted["stop_reason"], "end_turn");
     assert_eq!(converted["usage"]["output_tokens"], 3);
@@ -76,7 +81,7 @@ fn preserves_refusal_without_inventing_a_content_block_type() {
             "finish_reason": "content_filter"
         }]
     });
-    let converted = convert_response(&response, "model").unwrap();
+    let converted = convert(&response, "model").unwrap();
     assert_eq!(converted["stop_reason"], "refusal");
     assert_eq!(converted["stop_details"]["explanation"], "Cannot comply.");
     assert_eq!(
@@ -92,7 +97,7 @@ fn preserves_refusal_without_inventing_a_content_block_type() {
         "id": "chatcmpl_2",
         "choices": [{"message": {"role": "assistant", "content": null}, "finish_reason": "content_filter"}]
     });
-    let converted = convert_response(&filtered, "model").unwrap();
+    let converted = convert(&filtered, "model").unwrap();
     assert_eq!(
         converted["content"][0]["text"],
         "Response withheld by the upstream content filter."
@@ -127,7 +132,7 @@ fn rejects_malformed_tool_calls() {
             }]}, "finish_reason": "tool_calls"}]
         }),
     ] {
-        let error = convert_response(&response, "model").unwrap_err();
+        let error = convert(&response, "model").unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_GATEWAY);
     }
 }
@@ -139,7 +144,7 @@ fn rejects_unknown_finish_reason() {
             "id": "chatcmpl_1",
             "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": reason}]
         });
-        assert!(convert_response(&response, "model").is_err());
+        assert!(convert(&response, "model").is_err());
     }
 }
 
@@ -148,8 +153,8 @@ fn distinguishes_missing_usage_and_repairs_missing_response_ids() {
     let response = json!({
         "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
     });
-    let first = convert_response(&response, "model").unwrap();
-    let second = convert_response(&response, "model").unwrap();
+    let first = convert(&response, "model").unwrap();
+    let second = convert(&response, "model").unwrap();
     assert!(first["id"].as_str().unwrap().starts_with("msg_"));
     assert_ne!(first["id"], second["id"]);
     assert_eq!(first["usage"]["input_tokens"], 0);
@@ -160,7 +165,7 @@ fn distinguishes_missing_usage_and_repairs_missing_response_ids() {
         "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0}
     });
-    let zero = convert_response(&zero, "model").unwrap();
+    let zero = convert(&zero, "model").unwrap();
     assert_eq!(zero["usage"]["input_tokens"], 0);
     assert_eq!(zero["usage"]["output_tokens"], 0);
 }
@@ -170,12 +175,43 @@ fn rejects_malformed_upstream_response_fields() {
     for response in [
         json!({"choices": [{"message": {"role": "user", "content": "ok"}, "finish_reason": "stop"}]}),
         json!({"choices": [{"message": {"role": "assistant", "content": "ok", "tool_calls": [{"type": "custom"}]}, "finish_reason": "tool_calls"}]}),
-        json!({"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": "bad"}),
-        json!({"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": "1"}}),
+        json!({"choices": [{"message": {"role": "assistant", "content": "ok", "audio": {}}, "finish_reason": "stop"}]}),
+        json!({"choices": [{"message": {"role": "assistant", "content": "ok", "annotations": [{}]}, "finish_reason": "stop"}]}),
         json!({"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "tool_calls"}]}),
         json!({"choices": [{"message": {"role": "assistant", "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]}, "finish_reason": "stop"}]}),
     ] {
-        let error = convert_response(&response, "model").unwrap_err();
+        let error = convert(&response, "model").unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_GATEWAY);
     }
+}
+
+#[test]
+fn preserves_answer_when_usage_is_invalid() {
+    for raw_usage in [
+        json!("bad"),
+        json!({"prompt_tokens":"1","completion_tokens":2}),
+    ] {
+        let response = json!({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": raw_usage
+        });
+        let converted = convert(&response, "model").unwrap();
+        assert_eq!(converted["content"][0]["text"], "ok");
+        assert_eq!(converted["usage"]["input_tokens"], 0);
+    }
+}
+
+#[test]
+fn rejects_tool_calls_not_declared_by_the_request() {
+    let response = json!({
+        "choices": [{
+            "message": {"role":"assistant","tool_calls":[{
+                "id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}
+            }]},
+            "finish_reason":"tool_calls"
+        }]
+    });
+    let error = super::convert_response(&response, "model", &[]).unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+    assert!(error.message.contains("not declared"));
 }

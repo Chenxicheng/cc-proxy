@@ -320,6 +320,52 @@ fn rejects_unsupported_roles_and_generation_fields() {
 }
 
 #[test]
+fn rejects_malformed_collection_fields_and_undeclared_tool_choice() {
+    let base = json!({
+        "model": "gpt-4", "max_tokens": 10,
+        "messages": [{"role":"user","content":"hello"}]
+    });
+    for (field, value) in [
+        ("tools", json!({"name":"lookup"})),
+        ("stop_sequences", json!("stop")),
+        ("stop_sequences", json!(["stop", 1])),
+    ] {
+        let mut body = base.clone();
+        body[field] = value;
+        let error = convert_request(&body, "https://api.openai.com/v1").unwrap_err();
+        assert!(error.message.contains(field), "{}", error.message);
+    }
+
+    for tools in [
+        None,
+        Some(json!([{
+            "name":"other","input_schema":{"type":"object"}
+        }])),
+    ] {
+        let mut body = base.clone();
+        if let Some(tools) = tools {
+            body["tools"] = tools;
+        }
+        body["tool_choice"] = json!({"type":"tool","name":"lookup"});
+        let error = convert_request(&body, "https://api.openai.com/v1").unwrap_err();
+        assert!(error.message.contains("not declared"), "{}", error.message);
+    }
+}
+
+#[test]
+fn rejects_tool_results_without_a_preceding_tool_use() {
+    let body = json!({
+        "model":"gpt-4","max_tokens":10,
+        "messages":[{"role":"user","content":[{
+            "type":"tool_result","tool_use_id":"orphan","content":"result"
+        }]}]
+    });
+    let error = convert_request(&body, "https://api.openai.com/v1").unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(error.message.contains("no preceding tool_use"));
+}
+
+#[test]
 fn rejects_unmappable_mid_conversation_system_fields_and_blocks() {
     for system in [
         json!({"role": "system", "content": "instruction", "clear_at": "next_user_message"}),
@@ -373,9 +419,12 @@ fn maps_tool_result_text_and_ignores_thinking_history() {
         "model": "gpt-4",
         "max_tokens": 10,
         "messages": [
-            {"role": "assistant", "content": [{"type": "thinking", "thinking": "private", "signature": "sig"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "private", "signature": "sig"},
+                {"type": "tool_use", "id": "toolu_matched", "name": "lookup", "input": {}}
+            ]},
             {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "unmatched", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_matched", "content": [
                     {"type": "text", "text": "one"},
                     {"type": "text", "text": "two"}
                 ], "is_error": true},
@@ -386,11 +435,19 @@ fn maps_tool_result_text_and_ignores_thinking_history() {
     let converted = convert_request(&body, "https://api.openai.com/v1").unwrap();
     assert_eq!(
         converted["messages"][0],
-        json!({"role": "assistant", "content": null})
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "toolu_matched",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+            }]
+        })
     );
     assert_eq!(
         converted["messages"][1],
-        json!({"role": "tool", "tool_call_id": "unmatched", "content": "Error: one\ntwo"})
+        json!({"role": "tool", "tool_call_id": "toolu_matched", "content": "Error: one\ntwo"})
     );
     assert_eq!(
         converted["messages"][2],

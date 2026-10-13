@@ -181,6 +181,58 @@ fn streams_interleaved_tools_immediately_and_preserves_following_text() {
 }
 
 #[test]
+fn preserves_reasoning_after_tools_and_later_argument_fragments() {
+    let mut state = state(&["lookup"]);
+    let mut events = state
+        .process_chunk(&chunk(json!({"tool_calls":[call(0,"lookup","{")]}), None))
+        .unwrap();
+    events.extend(
+        state
+            .process_chunk(&chunk(json!({"reasoning_content":"later thought"}), None))
+            .unwrap(),
+    );
+    events.extend(
+        state
+            .process_chunk(&chunk(
+                json!({"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}),
+                Some("tool_calls"),
+            ))
+            .unwrap(),
+    );
+    events.extend(state.finish(true).unwrap());
+    check_lifecycle(&events);
+    assert!(events.iter().any(|event| {
+        event["delta"] == json!({"type":"thinking_delta","thinking":"later thought"})
+    }));
+    assert!(
+        events.iter().any(|event| {
+            event["delta"] == json!({"type":"input_json_delta","partial_json":"}"})
+        })
+    );
+}
+
+#[test]
+fn rejects_unsupported_audio_and_annotations() {
+    for delta in [json!({"audio":{}}), json!({"annotations":[{}]})] {
+        let mut state = state(&[]);
+        let error = state
+            .process_chunk(&chunk(delta, Some("stop")))
+            .unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+    }
+
+    let mut state = state(&[]);
+    assert!(
+        state
+            .process_chunk(&chunk(
+                json!({"content":"ok","annotations":[]}),
+                Some("stop")
+            ))
+            .is_ok()
+    );
+}
+
+#[test]
 fn buffers_only_ambiguous_or_incomplete_names() {
     let mut state = state(&["look", "lookup", "other"]);
     let first = state
@@ -311,8 +363,11 @@ fn distinguishes_usage_missing_zero_partial_and_usage_only() {
         .process_chunk(&chunk(json!({"content":"ok"}), Some("stop")))
         .unwrap();
     let missing = state.finish(false).unwrap();
-    assert_eq!(missing[0]["usage"], json!({"output_tokens":0}));
-    assert_eq!(state.usage_record()["usageStatus"], "missing_final_chunk");
+    assert_eq!(
+        missing[0]["usage"],
+        json!({"input_tokens":0,"output_tokens":0})
+    );
+    assert_eq!(state.usage_record()["usageStatus"], "unreported");
     state
         .process_chunk(&json!({"choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0}}))
         .unwrap();
@@ -330,6 +385,65 @@ fn distinguishes_usage_missing_zero_partial_and_usage_only() {
 }
 
 #[test]
+fn streaming_and_non_streaming_share_usage_conversion() {
+    let raw_usage = json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "prompt_tokens_details": {"cached_tokens":60,"cache_write_tokens":30}
+    });
+    let response = json!({
+        "choices": [{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+        "usage": raw_usage
+    });
+    let expected =
+        crate::protocol::convert_response(&response, "model", &[]).unwrap()["usage"].clone();
+
+    let mut state = state(&[]);
+    state
+        .process_chunk(&chunk(json!({"content":"ok"}), Some("stop")))
+        .unwrap();
+    state
+        .process_chunk(&json!({"choices":[],"usage":raw_usage}))
+        .unwrap();
+    let events = state.finish(true).unwrap();
+    assert_eq!(events[0]["usage"], expected);
+    assert_eq!(state.usage_record()["usageStatus"], "complete");
+}
+
+#[test]
+fn final_stream_usage_snapshot_replaces_earlier_counts() {
+    let mut state = state(&[]);
+    state
+        .process_chunk(&chunk(json!({"content":"ok"}), Some("stop")))
+        .unwrap();
+    for usage in [
+        json!({
+            "prompt_tokens": 40,
+            "completion_tokens": 5,
+            "prompt_tokens_details": {"cached_tokens":10,"cache_write_tokens":10}
+        }),
+        json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens":60,"cache_write_tokens":30}
+        }),
+    ] {
+        state
+            .process_chunk(&json!({"choices":[],"usage":usage}))
+            .unwrap();
+    }
+    assert_eq!(
+        state.finish(true).unwrap()[0]["usage"],
+        json!({
+            "input_tokens":10,
+            "output_tokens":10,
+            "cache_read_input_tokens":60,
+            "cache_creation_input_tokens":30
+        })
+    );
+}
+
+#[test]
 fn accepts_content_free_tails_but_rejects_post_finish_content_or_conflict() {
     let mut stream_state = state(&[]);
     let mut events = stream_state
@@ -338,7 +452,9 @@ fn accepts_content_free_tails_but_rejects_post_finish_content_or_conflict() {
     for tail in [
         chunk(json!({}), None),
         chunk(
-            json!({"role":"assistant","content":"","tool_calls":[]}),
+            json!({
+                "role":"assistant","content":"","tool_calls":[],"annotations":[]
+            }),
             Some("stop"),
         ),
         json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}),

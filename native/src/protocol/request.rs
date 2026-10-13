@@ -44,6 +44,38 @@ pub fn validate_request(body: &Value) -> Result<(), AppError> {
 
     validate_unit_interval(object, "temperature", &mut errors);
     validate_unit_interval(object, "top_p", &mut errors);
+    match object.get("stop_sequences") {
+        None => {}
+        Some(Value::Array(stops)) => {
+            for (index, stop) in stops.iter().enumerate() {
+                if !stop.is_string() {
+                    errors.push(format!(
+                        "stop_sequences[{index}]: stop sequence must be a string"
+                    ));
+                }
+            }
+        }
+        Some(_) => errors.push("stop_sequences: stop_sequences must be an array".to_owned()),
+    }
+    if object.get("tools").is_some_and(|tools| !tools.is_array()) {
+        errors.push("tools: tools must be an array".to_owned());
+    }
+    if let Some(choice) = object.get("tool_choice")
+        && choice.get("type").and_then(Value::as_str) == Some("tool")
+        && let Some(name) = choice.get("name").and_then(Value::as_str)
+        && !object
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            })
+    {
+        errors.push(format!(
+            "tool_choice.name: named tool choice {name:?} is not declared in tools"
+        ));
+    }
     if object
         .get("stream")
         .is_some_and(|value| !value.is_boolean())
@@ -557,13 +589,13 @@ fn convert_message(
 
 fn convert_user_blocks(
     blocks: &[Value],
-    _message_index: usize,
+    message_index: usize,
     ids: &mut IdContext,
 ) -> Result<Vec<Value>, AppError> {
     let mut tool_messages = Vec::new();
     let mut user_parts = Vec::new();
 
-    for block in blocks {
+    for (block_index, block) in blocks.iter().enumerate() {
         match block.get("type").and_then(Value::as_str) {
             Some("text") => user_parts.push(json!({
                 "type": "text",
@@ -575,8 +607,11 @@ fn convert_user_blocks(
                     .get("tool_use_id")
                     .and_then(Value::as_str)
                     .expect("validated tool_use_id");
-                let resolved_id = resolve_tool_result_id(original_id, ids)
-                    .unwrap_or_else(|| original_id.to_owned());
+                let resolved_id = resolve_tool_result_id(original_id, ids).ok_or_else(|| {
+                    AppError::bad_request(format!(
+                        "messages[{message_index}].content[{block_index}].tool_use_id: no preceding tool_use matches {original_id:?}"
+                    ))
+                })?;
                 let (text, images) = extract_tool_result(block);
                 let is_error = block.get("is_error").and_then(Value::as_bool) == Some(true);
                 let mut text = if is_error {

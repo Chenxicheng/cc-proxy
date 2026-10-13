@@ -14,8 +14,12 @@
         }
       ],
       "usage": {
-        "prompt_tokens": 5,
-        "completion_tokens": 3
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "prompt_tokens_details": {
+          "cached_tokens": 60,
+          "cache_write_tokens": 30
+        }
       }
     },
     "expected": {
@@ -32,8 +36,10 @@
       "stop_reason": "end_turn",
       "stop_sequence": null,
       "usage": {
-        "input_tokens": 5,
-        "output_tokens": 3
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 60,
+        "cache_creation_input_tokens": 30
       }
     }
   },

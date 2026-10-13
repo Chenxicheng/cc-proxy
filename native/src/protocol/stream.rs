@@ -19,7 +19,10 @@ use tokio::time::{Instant, timeout_at};
 
 use crate::storage::Storage;
 
-use super::response::{map_finish_reason, reasoning_content};
+use super::{
+    response::{map_finish_reason, reasoning_content},
+    usage::{UsageConversion, convert_usage, record_usage_metadata},
+};
 
 const FIRST_BODY_BYTES_TIMEOUT: Duration = Duration::from_secs(120);
 const FIRST_ANTHROPIC_EVENT_TIMEOUT: Duration = Duration::from_secs(240);
@@ -225,8 +228,7 @@ struct StreamState {
     content_seen: bool,
     refusal_text: String,
     finish_reason: Option<String>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
+    converted_usage: UsageConversion,
     upstream_usage: Option<Value>,
     error_details: Option<Value>,
 }
@@ -248,8 +250,7 @@ impl StreamState {
             content_seen: false,
             refusal_text: String::new(),
             finish_reason: None,
-            input_tokens: None,
-            output_tokens: None,
+            converted_usage: convert_usage(None),
             upstream_usage: None,
             error_details: None,
         }
@@ -267,24 +268,8 @@ impl StreamState {
                 .unwrap_or_else(|| error.to_string()));
         }
         if let Some(usage) = chunk.get("usage").filter(|usage| !usage.is_null()) {
-            let object = usage
-                .as_object()
-                .ok_or("Upstream stream usage must be an object or null")?;
-            if object.contains_key("prompt_tokens") || object.contains_key("completion_tokens") {
-                let token = |name: &str| -> Result<u64, String> {
-                    match object.get(name) {
-                        None | Some(Value::Null) => Ok(0),
-                        Some(value) => value.as_u64().ok_or_else(|| {
-                            format!("Upstream stream usage.{name} must be an integer")
-                        }),
-                    }
-                };
-                self.input_tokens = Some(token("prompt_tokens")?);
-                self.output_tokens = Some(token("completion_tokens")?);
-            }
-            if !object.is_empty() {
-                self.upstream_usage = Some(usage.clone());
-            }
+            self.converted_usage = convert_usage(Some(usage));
+            self.upstream_usage = Some(usage.clone());
         }
         if self.response_model.is_none() {
             self.response_model = chunk
@@ -323,6 +308,16 @@ impl StreamState {
                 ));
             }
         }
+        for field in ["audio", "function_call"] {
+            if delta.get(field).is_some_and(|value| !value.is_null()) {
+                return Err(format!("Upstream stream delta.{field} is unsupported"));
+            }
+        }
+        if delta.get("annotations").is_some_and(|value| {
+            !value.is_null() && value.as_array().is_none_or(|items| !items.is_empty())
+        }) {
+            return Err("Upstream stream delta.annotations are unsupported".into());
+        }
         if delta
             .get("tool_calls")
             .is_some_and(|calls| !calls.is_null() && !calls.is_array())
@@ -346,6 +341,7 @@ impl StreamState {
                 "content" | "refusal" | "reasoning_content" | "reasoning" => {
                     value.as_str().is_some_and(|text| !text.is_empty())
                 }
+                "annotations" => value.as_array().is_some_and(|items| !items.is_empty()),
                 "tool_calls" => value.as_array().is_some_and(|calls| !calls.is_empty()),
                 _ => !value.is_null(),
             });
@@ -363,8 +359,7 @@ impl StreamState {
             self.started = true;
         }
         let reasoning = reasoning_content(&choice["delta"]);
-        // Match main: reasoning after tools is not replayed as a new thinking block.
-        if !reasoning.is_empty() && self.tools.is_empty() {
+        if !reasoning.is_empty() {
             self.push_content(reasoning, ContentKind::Thinking, &mut events);
         }
         for (field, kind) in [
@@ -609,11 +604,9 @@ impl StreamState {
             delta["stop_details"] = json!({"type": "refusal", "category": Value::Null,
                 "explanation": if self.refusal_text.is_empty() { "Response withheld by the upstream content filter." } else { &self.refusal_text }});
         }
-        let mut usage = json!({"output_tokens": self.output_tokens.unwrap_or(0)});
-        if let Some(input) = self.input_tokens {
-            usage["input_tokens"] = json!(input);
-        }
-        events.push(json!({"type": "message_delta", "delta": delta, "usage": usage}));
+        events.push(
+            json!({"type": "message_delta", "delta": delta, "usage": self.converted_usage.client}),
+        );
         events.push(json!({"type": "message_stop"}));
         Ok(events)
     }
@@ -630,9 +623,9 @@ impl StreamState {
                 "empty_end_turn"
             } else {
                 "usable"
-            },
-            "usageStatus": if self.upstream_usage.is_some() { "complete" } else { "missing_final_chunk" }
+            }
         });
+        record_usage_metadata(&mut record, &self.converted_usage);
         if let Some(model) = &self.response_model {
             record["model"] = Value::String(model.clone());
         }

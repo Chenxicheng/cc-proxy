@@ -32,9 +32,13 @@
     {
       "choices": [],
       "usage": {
-        "prompt_tokens": 3,
-        "completion_tokens": 4,
-        "total_tokens": 7,
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "prompt_tokens_details": {
+          "cached_tokens": 60,
+          "cache_write_tokens": 30
+        },
         "completion_tokens_details": {
           "reasoning_tokens": 2
         }
@@ -141,8 +145,10 @@
     "output_tokens": 0
   },
   "finalUsage": {
-    "input_tokens": 3,
-    "output_tokens": 4
+    "input_tokens": 10,
+    "output_tokens": 10,
+    "cache_read_input_tokens": 60,
+    "cache_creation_input_tokens": 30
   },
   "toolNames": [
     "lookup"
