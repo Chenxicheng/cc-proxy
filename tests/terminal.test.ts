@@ -43,6 +43,22 @@ describe('fullscreen terminal', () => {
     jest.useRealTimers();
   });
 
+  it('shows completed and error records in the scrollable log pane', () => {
+    const { monitor, frame } = setup(12, 160);
+    try {
+      monitor.start('http://localhost:3080');
+      monitor.write('<- "model" [completed] "req_1"\n');
+      monitor.write(
+        '<- "model" [error] "req_2" status=429 type="rate_limit_error" (see error_logs)\n'
+      );
+      jest.advanceTimersByTime(33);
+      expect(frame()).toContain('[completed] "req_1"');
+      expect(frame()).toContain('[error] "req_2" status=429');
+    } finally {
+      monitor.stop();
+    }
+  });
+
   it('follows requests, freezes a scrolled viewport, and returns to live with End', () => {
     const { monitor, frame, key } = setup();
     try {

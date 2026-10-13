@@ -6,6 +6,23 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+#[test]
+fn terminal_error_summary_excludes_private_details_and_escapes_controls() {
+    let record = json!({
+        "modelName": "model\n\u{1b}[2J",
+        "requestId": "req_1",
+        "error": {"status": 429, "type": "rate_limit_error", "message": "private-message", "response": "private-body"}
+    });
+    let summary = error_summary(&record);
+    assert!(summary.contains("[error]"));
+    assert!(summary.contains("req_1"));
+    assert!(summary.contains("status=429"));
+    assert!(summary.contains("rate_limit_error"));
+    assert!(!summary.contains("private"));
+    assert!(!summary.contains('\n'));
+    assert!(!summary.contains('\u{1b}'));
+}
+
 #[tokio::test]
 async fn flushes_queued_records_on_shutdown() {
     let directory = tempdir().unwrap();

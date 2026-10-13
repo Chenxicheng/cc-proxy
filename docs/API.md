@@ -39,6 +39,8 @@ Accepts an Anthropic Messages request and forwards it to the configured OpenAI-c
 
 Every response includes `x-request-id`.
 
+Errors returned by this handler, including invalid JSON, validation failures and oversized bodies, are recorded in `error_logs/*.jsonl` with `requestId` and `error.type`. HTTP failures include `error.status`; errors emitted inside an already-started SSE response use `stream_error` without inventing a new HTTP status. The terminal prints an `[error]` summary without upstream error bodies. Validated stream completion prints `[completed]` before the final SSE events are emitted; this does not acknowledge client receipt. Usage records include `requestId` for correlation. See [terminal controls](terminal.md).
+
 Request conversion retains the established text/tool Chat Completions behavior where it matches the documented contracts. Input `user`, `assistant`, and text-only `system` messages retain their roles and order; top-level `system` is prepended. Unsupported roles, system-message `clear_at` values other than `never`, per-message `output_config`, and unsupported result-bearing content blocks return `400` instead of changing semantics or disappearing. Historical `thinking` and `redacted_thinking` blocks keep the existing behavior described below. Messages with missing or null content are skipped; historical assistant text, including short replies and JSON-start text, is preserved. GPT-5 and OpenAI o-series models use `max_completion_tokens`; other models use `max_tokens`, with the existing Azure minimum adjustment.
 
 Upstream requests explicitly send `Accept: application/json`, `Content-Type: application/json`, bearer authorization, `stream: true | false`, and an OpenAI JavaScript SDK-compatible user agent.

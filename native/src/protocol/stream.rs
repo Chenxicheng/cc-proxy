@@ -120,6 +120,7 @@ where
             match state.finish(done) {
                 Ok(events) => {
                     storage.record_usage(state.usage_record());
+                    eprintln!("<- {:?} [completed] {:?}", state.model, state.request_id);
                     for event in events { yield Ok(encode_event(event)); }
                 }
                 Err(message) => {
@@ -621,6 +622,7 @@ impl StreamState {
         let mut record = json!({
             "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "schemaVersion": 2,
+            "requestId": self.request_id,
             "provider": self.provider,
             "modelName": self.model,
             "streaming": true,
@@ -641,7 +643,7 @@ impl StreamState {
     }
 
     fn error_record(&self, message: &str) -> Value {
-        let mut error = json!({"message": message});
+        let mut error = json!({"message": message, "type": "stream_error"});
         if let Some(details) = &self.error_details {
             error["response"] = json!({"error": details});
         }

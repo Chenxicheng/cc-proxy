@@ -38,36 +38,43 @@ pub(super) async fn messages(
     let body = match body {
         Ok(body) => body,
         Err(_) => {
-            return with_request_id(
+            return error_response(
+                &state,
+                &request_id,
+                "unknown",
+                false,
                 AppError::new(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "Request body exceeds the 32 MiB limit",
-                )
-                .into_response(),
-                &request_id,
+                ),
             );
         }
     };
     let anthropic: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(error) => {
-            return with_request_id(
-                AppError::bad_request(format!("body: Invalid JSON: {error}")).into_response(),
+            return error_response(
+                &state,
                 &request_id,
+                "unknown",
+                false,
+                AppError::bad_request(format!("body: Invalid JSON: {error}")),
             );
         }
     };
-    if let Err(error) = validate_request(&anthropic) {
-        return with_request_id(error.into_response(), &request_id);
-    }
-    let model = anthropic["model"].as_str().expect("validated model");
+    let model = anthropic
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let streaming = anthropic.get("stream").and_then(Value::as_bool) == Some(true);
+    if let Err(error) = validate_request(&anthropic) {
+        return error_response(&state, &request_id, model, streaming, error);
+    }
     let response = handle_messages(&state, &request_id, &anthropic).await;
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            record_error(&state, &request_id, model, streaming, &error);
-            error.into_response()
+            return error_response(&state, &request_id, model, streaming, error);
         }
     };
     with_request_id(response, &request_id)
@@ -157,6 +164,7 @@ async fn handle_messages(
     if has_usage || empty_end_turn {
         let mut record = json!({
             "timestamp": now(),
+            "requestId": request_id,
             "schemaVersion": 2,
             "provider": state.config.base_url,
             "modelName": model,
@@ -176,20 +184,21 @@ async fn handle_messages(
     Ok(Json(converted).into_response())
 }
 
-fn record_error(
+fn error_response(
     state: &AppState,
     request_id: &str,
     model: &str,
     streaming: bool,
-    error: &AppError,
-) {
+    error: AppError,
+) -> Response {
     state.storage.record_error(error_record_value(
         request_id,
         &state.config.base_url,
         model,
         streaming,
-        error,
+        &error,
     ));
+    with_request_id(error.into_response(), request_id)
 }
 
 fn error_record_value(
@@ -202,6 +211,7 @@ fn error_record_value(
     let mut details = json!({
         "message": error.message,
         "status": error.status.as_u16(),
+        "type": error.error_type(),
     });
     let mut request_shape = None;
     if let Some(response) = &error.details {

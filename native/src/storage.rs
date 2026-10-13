@@ -50,6 +50,7 @@ impl Storage {
     }
 
     pub fn record_error(&self, record: Value) {
+        eprintln!("{}", error_summary(&record));
         self.enqueue(RecordKind::Error, record);
     }
 
@@ -74,6 +75,19 @@ impl Storage {
             }
         }
     }
+}
+
+fn error_summary(record: &Value) -> String {
+    // Summaries exclude upstream messages and bodies, which may contain private data.
+    let model = record["modelName"].as_str().unwrap_or("unknown");
+    let request_id = record["requestId"].as_str().unwrap_or("unknown");
+    let error_type = record["error"]["type"].as_str().unwrap_or("api_error");
+    let status = record["error"]["status"]
+        .as_u64()
+        .map_or_else(|| "n/a".to_owned(), |status| status.to_string());
+    format!(
+        "<- {model:?} [error] {request_id:?} status={status} type={error_type:?} (see error_logs)"
+    )
 }
 
 struct DailyWriter {
