@@ -4,18 +4,24 @@ import * as path from 'path';
 import * as os from 'os';
 import { AdapterConfig, ClaudeJson, ClaudeSettings } from '../types/config';
 
-const CONFIG_DIR = path.join(os.homedir(), '.claude-adapter');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const LEGACY_CONFIG_DIR = path.join(os.homedir(), '.claude-adapter');
+const CONFIG_DIR = path.join(os.homedir(), '.cc-proxy');
+
+function getConfigFile(): string {
+  return path.join(getConfigDir(), 'config.json');
+}
 
 /**
- * Load configuration from ~/.claude-adapter/config.json
+ * Load configuration from the legacy ~/.claude-adapter directory when present,
+ * otherwise from ~/.cc-proxy.
  */
 export function loadConfig(): AdapterConfig | null {
   try {
-    if (!fs.existsSync(CONFIG_FILE)) {
+    const configFile = getConfigFile();
+    if (!fs.existsSync(configFile)) {
       return null;
     }
-    const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const content = fs.readFileSync(configFile, 'utf-8');
     return JSON.parse(content) as AdapterConfig;
   } catch {
     return null;
@@ -23,12 +29,14 @@ export function loadConfig(): AdapterConfig | null {
 }
 
 /**
- * Save configuration to ~/.claude-adapter/config.json
+ * Save configuration to the legacy ~/.claude-adapter directory when present,
+ * otherwise to ~/.cc-proxy.
  */
 export function saveConfig(config: AdapterConfig): void {
+  const configDir = getConfigDir();
   // Ensure directory exists
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
   }
 
   const normalizedConfig: AdapterConfig =
@@ -56,21 +64,21 @@ export function saveConfig(config: AdapterConfig): void {
     normalizedConfig.port = config.port;
   }
 
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(normalizedConfig, null, 2), 'utf-8');
+  fs.writeFileSync(getConfigFile(), JSON.stringify(normalizedConfig, null, 2), 'utf-8');
 }
 
 /**
  * Check if configuration exists
  */
 export function configExists(): boolean {
-  return fs.existsSync(CONFIG_FILE);
+  return fs.existsSync(getConfigFile());
 }
 
 /**
  * Get the config directory path
  */
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+  return fs.existsSync(LEGACY_CONFIG_DIR) ? LEGACY_CONFIG_DIR : CONFIG_DIR;
 }
 
 // Claude settings file paths

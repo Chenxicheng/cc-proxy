@@ -1,9 +1,10 @@
 // Metadata storage utility
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir, platform, release } from 'os';
+import { platform, release } from 'os';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
 import { version as currentVersion } from '../../package.json';
+import { getConfigDir } from './config';
 
 export interface Metadata {
   userId: string; // Unique user ID (generated once)
@@ -15,8 +16,9 @@ export interface Metadata {
   createdAt: string; // First run timestamp
 }
 
-const METADATA_DIR = join(homedir(), '.claude-adapter');
-const METADATA_FILE = join(METADATA_DIR, 'metadata.json');
+function getMetadataFile(): string {
+  return join(getConfigDir(), 'metadata.json');
+}
 
 /**
  * Generate a unique user ID
@@ -36,8 +38,9 @@ function getOsName(): string {
  * Ensure metadata directory exists
  */
 function ensureMetadataDir(): void {
-  if (!existsSync(METADATA_DIR)) {
-    mkdirSync(METADATA_DIR, { recursive: true });
+  const metadataDir = getConfigDir();
+  if (!existsSync(metadataDir)) {
+    mkdirSync(metadataDir, { recursive: true });
   }
 }
 
@@ -51,8 +54,9 @@ function loadMetadata(): Metadata | null {
     return cachedMetadata;
   }
   try {
-    if (existsSync(METADATA_FILE)) {
-      const data = readFileSync(METADATA_FILE, 'utf-8');
+    const metadataFile = getMetadataFile();
+    if (existsSync(metadataFile)) {
+      const data = readFileSync(metadataFile, 'utf-8');
       cachedMetadata = JSON.parse(data);
       return cachedMetadata;
     }
@@ -68,7 +72,7 @@ function loadMetadata(): Metadata | null {
 function saveMetadata(metadata: Metadata): void {
   try {
     ensureMetadataDir();
-    writeFileSync(METADATA_FILE, JSON.stringify(metadata, null, 2));
+    writeFileSync(getMetadataFile(), JSON.stringify(metadata, null, 2));
     cachedMetadata = metadata;
   } catch {
     // Ignore write errors

@@ -4,6 +4,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const TEST_DIR = join(tmpdir(), 'cc-proxy-metadata-test-' + Date.now());
+const ADAPTER_DIR = join(TEST_DIR, '.claude-adapter');
+const CC_PROXY_DIR = join(TEST_DIR, '.cc-proxy');
 
 // Mock the home directory to use test directory
 jest.mock('os', () => {
@@ -35,9 +37,8 @@ describe('Metadata Utilities', () => {
       mkdirSync(TEST_DIR, { recursive: true });
     }
     // Create .claude-adapter subdirectory
-    const adapterDir = join(TEST_DIR, '.claude-adapter');
-    if (!existsSync(adapterDir)) {
-      mkdirSync(adapterDir, { recursive: true });
+    if (!existsSync(ADAPTER_DIR)) {
+      mkdirSync(ADAPTER_DIR, { recursive: true });
     }
   });
 
@@ -47,6 +48,11 @@ describe('Metadata Utilities', () => {
       const metadataPath = join(TEST_DIR, '.claude-adapter', 'metadata.json');
       if (existsSync(metadataPath)) {
         rmSync(metadataPath);
+      }
+
+      const ccProxyMetadataPath = join(CC_PROXY_DIR, 'metadata.json');
+      if (existsSync(ccProxyMetadataPath)) {
+        rmSync(ccProxyMetadataPath);
       }
     } catch {
       // Ignore cleanup errors
@@ -113,6 +119,15 @@ describe('Metadata Utilities', () => {
   });
 
   describe('getMetadata', () => {
+    it('should create metadata in cc-proxy when the legacy directory is absent', () => {
+      rmSync(ADAPTER_DIR, { recursive: true });
+
+      getMetadata();
+
+      expect(existsSync(join(CC_PROXY_DIR, 'metadata.json'))).toBe(true);
+      expect(existsSync(ADAPTER_DIR)).toBe(false);
+    });
+
     it('should create new metadata on first run', () => {
       const metadata = getMetadata();
 

@@ -144,7 +144,9 @@ The dropped counter increases when the bounded observability queue cannot accept
 
 ## Configuration
 
-The existing configuration file remains compatible:
+For a new installation, configuration and update metadata are stored in `~/.cc-proxy/`.
+If `~/.claude-adapter/` already exists, cc-proxy continues to use that directory without moving it,
+so the existing configuration remains compatible:
 
 ```json
 {

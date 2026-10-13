@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 
 const TEST_DIR = join(tmpdir(), 'cc-proxy-config-test-' + Date.now());
 const ADAPTER_DIR = join(TEST_DIR, '.claude-adapter');
+const CC_PROXY_DIR = join(TEST_DIR, '.cc-proxy');
 const CLAUDE_DIR = join(TEST_DIR, '.claude');
 
 // Mock os.homedir to use test directory
@@ -45,6 +46,9 @@ describe('Config Utilities', () => {
         try {
             const configPath = join(ADAPTER_DIR, 'config.json');
             if (existsSync(configPath)) rmSync(configPath);
+
+            const ccProxyConfigPath = join(CC_PROXY_DIR, 'config.json');
+            if (existsSync(ccProxyConfigPath)) rmSync(ccProxyConfigPath);
 
             const claudeJsonPath = join(TEST_DIR, '.claude.json');
             if (existsSync(claudeJsonPath)) rmSync(claudeJsonPath);
@@ -165,7 +169,7 @@ describe('Config Utilities', () => {
             expect(content.upstreamCapabilities).toEqual({ assistantPrefill: 'native' });
         });
 
-        it('should create directory if not exists', () => {
+        it('should create the cc-proxy directory when the legacy directory is absent', () => {
             if (existsSync(ADAPTER_DIR)) rmSync(ADAPTER_DIR, { recursive: true });
 
             const config = {
@@ -176,7 +180,8 @@ describe('Config Utilities', () => {
 
             saveConfig(config);
 
-            expect(existsSync(ADAPTER_DIR)).toBe(true);
+            expect(existsSync(join(CC_PROXY_DIR, 'config.json'))).toBe(true);
+            expect(existsSync(ADAPTER_DIR)).toBe(false);
         });
 
         it('should drop legacy toolFormat when rewriting config', () => {
@@ -211,9 +216,15 @@ describe('Config Utilities', () => {
     });
 
     describe('getConfigDir', () => {
-        it('should return config directory path', () => {
+        it('should return the legacy config directory when it exists', () => {
             const dir = getConfigDir();
-            expect(dir).toContain('.claude-adapter');
+            expect(dir).toBe(ADAPTER_DIR);
+        });
+
+        it('should return the cc-proxy directory when the legacy directory is absent', () => {
+            rmSync(ADAPTER_DIR, { recursive: true });
+
+            expect(getConfigDir()).toBe(CC_PROXY_DIR);
         });
     });
 
