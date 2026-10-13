@@ -10,6 +10,8 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Added
 
+- Color fullscreen service status, model configuration and request logs using the reference monitor's semantic palette.
+
 - Log validated streaming completion and mirror request/response failures to the fullscreen terminal. Persist early request rejections and attach request IDs to usage records.
 - Show a fullscreen terminal after startup with a fixed service/model summary and scrollable send/response logs. Support keyboard scrolling, live following, resize, bounded history, terminal restoration, and plain output when redirected.
 

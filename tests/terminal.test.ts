@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import chalk from 'chalk';
 import { TerminalMonitor } from '../src/terminal';
 
 function setup(rows = 12, columns = 100) {
@@ -41,6 +42,72 @@ describe('fullscreen terminal', () => {
     if (envTerm === undefined) delete process.env.TERM;
     else process.env.TERM = envTerm;
     jest.useRealTimers();
+  });
+
+  it.each([
+    ['-> model [sent] req_1', '120;170;230'],
+    ['<- model [streaming] req_1', '78;201;176'],
+    ['<- model [received] req_1', '120;200;120'],
+    ['<- "model" [completed] "req_1"', '120;200;120'],
+    ['<- "model" [error] "req_1" status=502', '220;120;120'],
+    ['[adapter] Failed to write JSONL record', '220;120;120'],
+    ['Update 1.0.0 -> 1.1.0', '220;200;100'],
+  ])('colors the log row for %s', (line, rgb) => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    const { monitor, frame } = setup();
+    try {
+      monitor.start('http://localhost:3080');
+      monitor.write(`${line}\n`);
+      jest.advanceTimersByTime(33);
+      const logRow = frame().split('\x1b[6;1H')[1].split('\x1b[7;1H')[0];
+      expect(logRow).toContain(`\x1b[38;2;${rgb}m`);
+      expect(logRow).toContain(line);
+      expect(logRow).toContain('\x1b[39m');
+      expect(frame()).toContain('\x1b[48;2;78;201;176m');
+      expect(frame()).toContain('\x1b[38;2;190;140;240m');
+    } finally {
+      monitor.stop();
+      chalk.level = previousLevel;
+    }
+  });
+
+  it('keeps error color when narrow rows clip the status and removes injected colors', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    const { monitor, frame } = setup(12, 20);
+    try {
+      monitor.start('http://localhost:3080');
+      monitor.write('<- \x1b[32ma-very-long-model-name [error] req_1\n');
+      jest.advanceTimersByTime(33);
+      const logRow = frame().split('\x1b[6;1H')[1].split('\x1b[7;1H')[0];
+      expect(logRow).toContain('\x1b[38;2;220;120;120m');
+      expect(logRow).not.toContain('\x1b[32m');
+      expect(logRow).not.toContain('[error]');
+    } finally {
+      monitor.stop();
+      chalk.level = previousLevel;
+    }
+  });
+
+  it('keeps readable status text when colors are disabled', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 0;
+    const { monitor, frame } = setup();
+    try {
+      monitor.start('http://localhost:3080');
+      monitor.write('<- model [completed] req_1\n');
+      jest.advanceTimersByTime(33);
+      expect(frame()).toContain('[completed] req_1');
+      expect(
+        frame()
+          .split('\x1b')
+          .some((part) => /^\[[\d;]*m/.test(part))
+      ).toBe(false);
+    } finally {
+      monitor.stop();
+      chalk.level = previousLevel;
+    }
   });
 
   it('shows completed and error records in the scrollable log pane', () => {

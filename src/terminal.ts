@@ -1,10 +1,23 @@
 import { emitKeypressEvents, Key } from 'node:readline';
 import { stripVTControlCharacters } from 'node:util';
+import chalk from 'chalk';
 import { ModelConfig } from './types/config';
-import { UI } from './utils/ui';
 
 const HISTORY_LIMIT = 1000;
 const LINE_LIMIT = 4096;
+
+// Match the reference monitor's semantic palette without changing setup prompts.
+const colors = {
+  header: '#121216',
+  live: '#4EC9B0',
+  model: '#BE8CF0',
+  sent: '#78AAE6',
+  success: '#78C878',
+  warning: '#DCC864',
+  error: '#DC7878',
+  dim: '#B4BEC8',
+  text: '#F0F4F8',
+};
 
 // Terminal output is presentation only; request processing remains in Rust.
 export class TerminalMonitor {
@@ -148,13 +161,41 @@ export class TerminalMonitor {
           ];
     let frame = '\x1b[H';
     for (let index = 0; index < height; index++) {
-      const text = fit(rows[index] ?? '', width);
-      const styled =
-        index === 0 ? UI.highlight(text) : index === 4 || index >= height - 2 ? UI.dim(text) : text;
-      frame += `\x1b[${index + 1};1H\x1b[2K${styled}`;
+      const row = rows[index] ?? '';
+      let color = logColor(row);
+      if (height < 9) color = colors.warning;
+      else if (index === 0) color = colors.header;
+      else if (index <= 3) color = colors.model;
+      else if (index === 4) color = this.top === undefined ? colors.live : colors.warning;
+      else if (index >= height - 2) color = colors.dim;
+      const isHeader = index === 0 && height >= 9;
+      const style = chalk.hex(color).bgHex(isHeader ? colors.live : '#121216');
+      // Classify before clipping; apply our colors only after sanitizing the text.
+      const text = `\x1b[2K${fit(row, width)}`;
+      frame += `\x1b[${index + 1};1H${isHeader ? style.bold(text) : style(text)}`;
     }
     this.output.write(frame);
   }
+}
+
+function logColor(line: string): string {
+  const status = line.match(/^(?:->|<-) .+ \[(sent|streaming|received|completed|error)\] /)?.[1];
+  switch (status) {
+    case 'sent':
+      return colors.sent;
+    case 'streaming':
+      return colors.live;
+    case 'received':
+    case 'completed':
+      return colors.success;
+    case 'error':
+      return colors.error;
+  }
+  if (line.startsWith('[adapter]')) {
+    return /\b(Failed|unavailable)\b/.test(line) ? colors.error : colors.dim;
+  }
+  if (/^(Update |Manual setup:)/.test(line)) return colors.warning;
+  return colors.text;
 }
 
 function clean(text: string): string {
