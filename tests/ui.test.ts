@@ -150,7 +150,7 @@ describe('UI Utility Class', () => {
             expect(updateMessage).toContain('1.0.0');
             expect(updateMessage).toContain('1.1.0');
             const hintMessage = mockConsoleLog.mock.calls[2][0];
-            expect(hintMessage).toContain('Run "npm i -g claude-adapter" to update');
+            expect(hintMessage).toContain('Run "npm i -g cc-proxy" to update');
         });
     });
 });

@@ -5,7 +5,7 @@ import { version } from '../package.json';
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-const READY_PREFIX = 'CLAUDE_ADAPTER_READY=';
+const READY_PREFIX = 'CC_PROXY_READY=';
 
 interface NativeTarget {
   directory: string;
@@ -13,8 +13,8 @@ interface NativeTarget {
 }
 
 const NATIVE_TARGETS: Record<string, NativeTarget> = {
-  'linux-x64': { directory: 'linux-x64-gnu', binary: 'claude-adapter-native' },
-  'win32-x64': { directory: 'win32-x64-msvc', binary: 'claude-adapter-native.exe' },
+  'linux-x64': { directory: 'linux-x64-gnu', binary: 'cc-proxy-native' },
+  'win32-x64': { directory: 'win32-x64-msvc', binary: 'cc-proxy-native.exe' },
 };
 
 export interface NativeServer {
@@ -57,7 +57,7 @@ export function resolveNativeBinary(): string {
   }
   throw new Error(
     `Offline package is missing bin/${target.directory}/${target.binary}. ` +
-      `Reinstall claude-adapter@${version} from the complete npm tarball.`
+      `Reinstall cc-proxy@${version} from the complete npm tarball.`
   );
 }
 
@@ -65,8 +65,8 @@ export async function startNativeServer(configPath: string, port: number): Promi
   const binary = resolveNativeBinary();
   const windowsStdinShutdown = process.platform === 'win32';
   const env = { ...process.env };
-  if (windowsStdinShutdown) env.CLAUDE_ADAPTER_STDIN_SHUTDOWN = '1';
-  else delete env.CLAUDE_ADAPTER_STDIN_SHUTDOWN;
+  if (windowsStdinShutdown) env.CC_PROXY_STDIN_SHUTDOWN = '1';
+  else delete env.CC_PROXY_STDIN_SHUTDOWN;
   const child = spawn(binary, ['--config', configPath, '--port', String(port)], {
     stdio: [windowsStdinShutdown ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     windowsHide: true,

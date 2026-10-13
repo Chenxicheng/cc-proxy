@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI entry point for claude-adapter
+// CLI entry point for cc-proxy
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { join } from 'node:path';
@@ -22,7 +22,7 @@ import { version } from '../package.json';
 const program = new Command();
 
 program
-  .name('claude-adapter')
+  .name('cc-proxy')
   .description('Proxy adapter to use OpenAI API with Claude Code')
   .version(version);
 
@@ -41,7 +41,7 @@ program
       // Step 1: Update ~/.claude.json for onboarding skip (if enabled)
       if (options.claudeSettings) {
         updateClaudeJson();
-        UI.statusDone(true, 'Initialized Claude Adapter');
+        UI.statusDone(true, 'Initialized cc-proxy');
       } else {
         UI.info('Skipping Claude settings update (--no-claude-settings)');
       }
@@ -53,7 +53,7 @@ program
         UI.log(''); // Spacing
         config = await promptForConfiguration();
         saveConfig(config);
-        UI.info('Creating Claude Adapter API...');
+        UI.info('Creating cc-proxy API...');
       } else {
         UI.info('Using existing configuration');
       }
@@ -62,7 +62,7 @@ program
       const preferredPort = parseInt(options.port, 10) || 3080;
       const server = await startNativeServer(join(getConfigDir(), 'config.json'), preferredPort);
       const proxyUrl = server.url;
-      UI.statusDone(true, `Claude Adapter running at ${UI.newUrl(proxyUrl)}`);
+      UI.statusDone(true, `cc-proxy running at ${UI.newUrl(proxyUrl)}`);
 
       // Step 4: Update Claude Code settings (if enabled)
       if (options.claudeSettings) {
@@ -80,7 +80,7 @@ program
         UI.hint(`Set ANTHROPIC_BASE_URL=${proxyUrl} in your Claude Code settings`);
       }
 
-      UI.success('Claude Adapter is ready!');
+      UI.success('cc-proxy is ready!');
       UI.info('Open a new terminal tab and run Claude Code.');
       UI.hint('Press Ctrl+C to stop the proxy server.');
 
@@ -98,7 +98,7 @@ program
         shuttingDown = true;
         UI.log('');
         await server.stop(signal);
-        UI.success('Claude Adapter stopped');
+        UI.success('cc-proxy stopped');
         process.exit(0);
       };
       process.once('SIGINT', () => void shutdown('SIGINT'));

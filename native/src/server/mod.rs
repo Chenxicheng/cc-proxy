@@ -68,12 +68,12 @@ pub(super) async fn run() -> Result<(), String> {
 
     let (listener, port) = bind_available(arguments.port).await?;
     let ready = json!({"url": format!("http://localhost:{port}"), "port": port});
-    println!("CLAUDE_ADAPTER_READY={ready}");
+    println!("CC_PROXY_READY={ready}");
     io::stdout().flush().map_err(|error| error.to_string())?;
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(
-            env::var_os("CLAUDE_ADAPTER_STDIN_SHUTDOWN").is_some(),
+            env::var_os("CC_PROXY_STDIN_SHUTDOWN").is_some(),
         ))
         .await
         .map_err(|error| format!("Server failed: {error}"))?;

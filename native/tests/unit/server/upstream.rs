@@ -26,8 +26,8 @@ fn custom_upstream_headers_are_preserved() {
         api_key_env: None,
         upstream_headers: Some(HashMap::from([
             ("HTTP-Referer".to_owned(), "https://example.com".to_owned()),
-            ("X-Title".to_owned(), "Claude Adapter".to_owned()),
-            ("User-Agent".to_owned(), "Claude-Adapter/2.0".to_owned()),
+            ("X-Title".to_owned(), "cc-proxy".to_owned()),
+            ("User-Agent".to_owned(), "cc-proxy/2.0".to_owned()),
         ])),
         upstream_capabilities: Default::default(),
     };
@@ -35,8 +35,8 @@ fn custom_upstream_headers_are_preserved() {
     let headers = build_default_headers(&config).unwrap();
 
     assert_eq!(headers["http-referer"], "https://example.com");
-    assert_eq!(headers["x-title"], "Claude Adapter");
-    assert_eq!(headers[header::USER_AGENT], "Claude-Adapter/2.0");
+    assert_eq!(headers["x-title"], "cc-proxy");
+    assert_eq!(headers[header::USER_AGENT], "cc-proxy/2.0");
     assert_eq!(headers[header::ACCEPT], "application/json");
     assert_eq!(headers[header::CONTENT_TYPE], "application/json");
     assert_eq!(headers[header::AUTHORIZATION], "Bearer secret");

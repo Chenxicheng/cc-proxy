@@ -9,12 +9,12 @@ describe('parseUpstreamHeadersInput', () => {
   it('should parse a valid headers JSON object', () => {
     expect(
       parseUpstreamHeadersInput(
-        '{"HTTP-Referer":"https://example.com","X-Title":"Claude Adapter","User-Agent":"Claude-Adapter/2.2"}'
+        '{"HTTP-Referer":"https://example.com","X-Title":"cc-proxy","User-Agent":"cc-proxy/2.2"}'
       )
     ).toEqual({
       'HTTP-Referer': 'https://example.com',
-      'X-Title': 'Claude Adapter',
-      'User-Agent': 'Claude-Adapter/2.2',
+      'X-Title': 'cc-proxy',
+      'User-Agent': 'cc-proxy/2.2',
     });
   });
 

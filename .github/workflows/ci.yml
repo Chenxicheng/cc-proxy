@@ -43,10 +43,10 @@ jobs:
         include:
           - runner: ubuntu-24.04
             package: linux-x64-gnu
-            binary: claude-adapter-native
+            binary: cc-proxy-native
           - runner: windows-2025
             package: win32-x64-msvc
-            binary: claude-adapter-native.exe
+            binary: cc-proxy-native.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -64,9 +64,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ../.cc-proxy-target/release/claude-adapter-native.exe --version
+            ../.cc-proxy-target/release/cc-proxy-native.exe --version
           else
-            ../.cc-proxy-target/release/claude-adapter-native --version
+            ../.cc-proxy-target/release/cc-proxy-native --version
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -91,9 +91,9 @@ jobs:
       - name: Stage offline binaries
         run: |
           mkdir -p bin/linux-x64-gnu bin/win32-x64-msvc
-          cp artifacts/native-linux-x64-gnu/claude-adapter-native bin/linux-x64-gnu/
-          cp artifacts/native-win32-x64-msvc/claude-adapter-native.exe bin/win32-x64-msvc/
-          chmod +x bin/linux-x64-gnu/claude-adapter-native
+          cp artifacts/native-linux-x64-gnu/cc-proxy-native bin/linux-x64-gnu/
+          cp artifacts/native-win32-x64-msvc/cc-proxy-native.exe bin/win32-x64-msvc/
+          chmod +x bin/linux-x64-gnu/cc-proxy-native
       - name: Package and clean-install
         env:
           CLEAN_INSTALL: '1'

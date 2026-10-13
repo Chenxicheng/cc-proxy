@@ -189,11 +189,11 @@ await writeFile(
 );
 const binary = path.resolve(
   process.env.ADAPTER_BINARY ??
-    `../.cc-proxy-target/release/claude-adapter-native${process.platform === 'win32' ? '.exe' : ''}`
+    `../.cc-proxy-target/release/cc-proxy-native${process.platform === 'win32' ? '.exe' : ''}`
 );
 const child = spawn(binary, ['--config', config, '--port', '0'], {
   stdio: ['pipe', 'pipe', 'ignore'],
-  env: { ...process.env, CLAUDE_ADAPTER_STDIN_SHUTDOWN: '1' },
+  env: { ...process.env, CC_PROXY_STDIN_SHUTDOWN: '1' },
 });
 let completed = 0;
 try {
@@ -210,7 +210,7 @@ try {
     let buffer = '';
     child.stdout.on('data', (data) => {
       buffer += data;
-      const line = buffer.split('\n').find((value) => value.startsWith('CLAUDE_ADAPTER_READY='));
+      const line = buffer.split('\n').find((value) => value.startsWith('CC_PROXY_READY='));
       if (line) {
         clearTimeout(timer);
         resolve(JSON.parse(line.split('=')[1]).url);

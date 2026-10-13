@@ -33,6 +33,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
           flags: unittests
-          name: codecov-claude-adapter
+          name: codecov-cc-proxy
           fail_ci_if_error: false
           verbose: true

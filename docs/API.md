@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-Claude Adapter is a CLI product. It starts a native Rust proxy and does not export Node.js server or converter APIs.
+cc-proxy is a CLI product. It starts a native Rust proxy and does not export Node.js server or converter APIs.
 
 ## `POST /v1/messages`
 
@@ -108,7 +108,7 @@ Parity exceptions: main's reused tool/text indices, fragmented tool names, missi
 ```json
 {
   "status": "ok",
-  "adapter": "claude-adapter",
+  "adapter": "cc-proxy",
   "dropped_jsonl_records": 0
 }
 ```
@@ -154,7 +154,7 @@ The existing configuration file remains compatible:
   },
   "upstreamHeaders": {
     "HTTP-Referer": "https://example.com",
-    "User-Agent": "Claude-Adapter/2.0"
+    "User-Agent": "cc-proxy/2.0"
   }
 }
 ```

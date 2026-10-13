@@ -18,7 +18,7 @@ const spawnMock = jest.mocked(spawn);
 const existsSyncMock = jest.mocked(existsSync);
 const originalPlatform = process.platform;
 const originalArch = process.arch;
-const TEST_API_KEY_ENV = 'CLAUDE_ADAPTER_TEST_API_KEY';
+const TEST_API_KEY_ENV = 'CC_PROXY_TEST_API_KEY';
 
 interface FakeChild extends ChildProcess {
   stdout: PassThrough;
@@ -67,8 +67,8 @@ afterEach(() => {
 
 describe('native platform selection', () => {
   it.each([
-    ['linux', 'x64', 'linux-x64-gnu', 'claude-adapter-native'],
-    ['win32', 'x64', 'win32-x64-msvc', 'claude-adapter-native.exe'],
+    ['linux', 'x64', 'linux-x64-gnu', 'cc-proxy-native'],
+    ['win32', 'x64', 'win32-x64-msvc', 'cc-proxy-native.exe'],
   ] as const)('maps %s-%s to its bundled binary', (platform, arch, directory, binary) => {
     expect(nativeTargetForPlatform(platform, arch)).toEqual({ directory, binary });
   });
@@ -84,7 +84,7 @@ describe('native platform selection', () => {
     Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
     existsSyncMock.mockReturnValue(false);
     expect(() => resolveNativeBinary()).toThrow(
-      /Offline package is missing bin\/win32-x64-msvc\/claude-adapter-native\.exe.*Reinstall claude-adapter@1\.0\.0/
+      /Offline package is missing bin\/win32-x64-msvc\/cc-proxy-native\.exe.*Reinstall cc-proxy@1\.0\.0/
     );
   });
 
@@ -109,7 +109,7 @@ describe('native process lifecycle', () => {
     spawnMock.mockReturnValue(child);
 
     const starting = startNativeServer('/tmp/config.json', 3080);
-    child.stdout.write('CLAUDE_ADAPTER_READY={"url":"http://localhost:3080"}\n');
+    child.stdout.write('CC_PROXY_READY={"url":"http://localhost:3080"}\n');
     const server = await starting;
     await server.stop();
 
@@ -119,10 +119,10 @@ describe('native process lifecycle', () => {
     const options = spawnMock.mock.calls[0][2]!;
     if (process.platform === 'win32') {
       expect(options.stdio?.[0]).toBe('pipe');
-      expect(options.env?.CLAUDE_ADAPTER_STDIN_SHUTDOWN).toBe('1');
+      expect(options.env?.CC_PROXY_STDIN_SHUTDOWN).toBe('1');
     } else {
       expect(options.stdio?.[0]).toBe('ignore');
-      expect(options.env?.CLAUDE_ADAPTER_STDIN_SHUTDOWN).toBeUndefined();
+      expect(options.env?.CC_PROXY_STDIN_SHUTDOWN).toBeUndefined();
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     }
   });
@@ -133,7 +133,7 @@ describe('native process lifecycle', () => {
     spawnMock.mockReturnValue(child);
 
     const starting = startNativeServer('/tmp/config.json', 3080);
-    child.stdout.write('CLAUDE_ADAPTER_READY={"url":"http://localhost:3080"}\n');
+    child.stdout.write('CC_PROXY_READY={"url":"http://localhost:3080"}\n');
     const server = await starting;
 
     expect(spawnMock.mock.calls[0][2]?.env?.[TEST_API_KEY_ENV]).toBe('secret');
@@ -144,7 +144,7 @@ describe('native process lifecycle', () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
     const starting = startNativeServer('/tmp/config.json', 3080);
-    child.stdout.write('CLAUDE_ADAPTER_READY={}\n');
+    child.stdout.write('CC_PROXY_READY={}\n');
     await expect(starting).rejects.toThrow('ready record has no URL');
   });
 

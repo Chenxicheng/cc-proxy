@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const TEST_DIR = join(tmpdir(), 'claude-adapter-config-test-' + Date.now());
+const TEST_DIR = join(tmpdir(), 'cc-proxy-config-test-' + Date.now());
 const ADAPTER_DIR = join(TEST_DIR, '.claude-adapter');
 const CLAUDE_DIR = join(TEST_DIR, '.claude');
 
@@ -80,7 +80,7 @@ describe('Config Utilities', () => {
                 models: { opus: 'gpt-4', sonnet: 'gpt-3.5', haiku: 'gpt-3.5' },
                 upstreamHeaders: {
                     'HTTP-Referer': 'https://example.com',
-                    'X-Title': 'Claude Adapter'
+                    'X-Title': 'cc-proxy'
                 },
                 upstreamCapabilities: { assistantPrefill: 'continue_final_message' as const }
             };
@@ -131,7 +131,7 @@ describe('Config Utilities', () => {
                 models: { opus: 'model-1', sonnet: 'model-2', haiku: 'model-3' },
                 upstreamHeaders: {
                     'HTTP-Referer': 'https://example.com',
-                    'X-Title': 'Claude Adapter'
+                    'X-Title': 'cc-proxy'
                 }
             };
 

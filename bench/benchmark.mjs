@@ -278,9 +278,9 @@ async function verifyProtocolScenarios(url, mock) {
     firstChatHeaders.accept !== 'application/json' ||
     firstChatHeaders['content-type'] !== 'application/json' ||
     firstChatHeaders.authorization !== 'Bearer benchmark' ||
-    firstChatHeaders['user-agent'] !== 'Claude-Adapter-Benchmark/2.0' ||
+    firstChatHeaders['user-agent'] !== 'cc-proxy-benchmark/2.0' ||
     firstChatHeaders['http-referer'] !== 'https://example.com' ||
-    firstChatHeaders['x-title'] !== 'Claude Adapter Benchmark'
+    firstChatHeaders['x-title'] !== 'cc-proxy Benchmark'
   ) {
     throw new Error('TypeScript-compatible HTTP headers preflight failed');
   }
@@ -576,33 +576,33 @@ function waitForDrainOrClose(response) {
 }
 
 async function startRustAdapter(baseUrl) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'claude-adapter-bench-'));
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'cc-proxy-bench-'));
   const config = path.join(directory, 'config.json');
   await writeFile(
     config,
     JSON.stringify({
       baseUrl,
-      apiKeyEnv: 'CLAUDE_ADAPTER_BENCH_API_KEY',
+      apiKeyEnv: 'CC_PROXY_BENCH_API_KEY',
       models: { opus: 'benchmark-model', sonnet: 'benchmark-model', haiku: 'benchmark-model' },
       upstreamHeaders: {
         'HTTP-Referer': 'https://example.com',
-        'X-Title': 'Claude Adapter Benchmark',
-        'User-Agent': 'Claude-Adapter-Benchmark/2.0',
+        'X-Title': 'cc-proxy Benchmark',
+        'User-Agent': 'cc-proxy-benchmark/2.0',
       },
     })
   );
   const child = spawn(
     path.resolve(
       process.env.BENCH_BINARY ??
-        `../.cc-proxy-target/release/claude-adapter-native${process.platform === 'win32' ? '.exe' : ''}`
+        `../.cc-proxy-target/release/cc-proxy-native${process.platform === 'win32' ? '.exe' : ''}`
     ),
     ['--config', config, '--port', '0'],
     {
       stdio: ['pipe', 'pipe', process.env.BENCH_DEBUG ? 'inherit' : 'ignore'],
       env: {
         ...process.env,
-        CLAUDE_ADAPTER_BENCH_API_KEY: 'benchmark',
-        CLAUDE_ADAPTER_STDIN_SHUTDOWN: '1',
+        CC_PROXY_BENCH_API_KEY: 'benchmark',
+        CC_PROXY_STDIN_SHUTDOWN: '1',
       },
     }
   );
@@ -611,8 +611,8 @@ async function startRustAdapter(baseUrl) {
     child.once('error', reject);
     child.stdout.on('data', (chunk) => {
       output += chunk;
-      const line = output.split('\n').find((value) => value.startsWith('CLAUDE_ADAPTER_READY='));
-      if (line) resolveReady(JSON.parse(line.slice('CLAUDE_ADAPTER_READY='.length)).url);
+      const line = output.split('\n').find((value) => value.startsWith('CC_PROXY_READY='));
+      if (line) resolveReady(JSON.parse(line.slice('CC_PROXY_READY='.length)).url);
     });
     child.once('exit', (code) => reject(new Error(`Rust adapter exited before ready: ${code}`)));
   });

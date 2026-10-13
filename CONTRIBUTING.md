@@ -1,10 +1,10 @@
-# Contributing to Claude Adapter
+# Contributing to cc-proxy
 
-Thank you for your interest in contributing to Claude Adapter! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to cc-proxy! This document provides guidelines and instructions for contributing.
 
 ## Table of Contents
 
-- [Contributing to Claude Adapter](#contributing-to-claude-adapter)
+- [Contributing to cc-proxy](#contributing-to-cc-proxy)
   - [Table of Contents](#table-of-contents)
   - [Code of Conduct](#code-of-conduct)
   - [Getting Started](#getting-started)
@@ -50,8 +50,8 @@ By participating in this project, you agree to maintain a respectful and inclusi
 2. **Clone your fork**
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/claude-adapter.git
-   cd claude-adapter
+   git clone https://github.com/YOUR_USERNAME/cc-proxy.git
+   cd cc-proxy
    ```
 
 3. **Install dependencies**
@@ -72,7 +72,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Project Structure
 
 ```
-claude-adapter/
+cc-proxy/
 ├── native/                 # Rust proxy, protocol conversion, streaming, JSONL
 ├── src/
 │   ├── cli.ts              # CLI/configuration entry point
@@ -190,6 +190,6 @@ npm run format
 
 ## Questions?
 
-If you have questions, please [open an issue](https://github.com/shantoislamdev/claude-adapter/issues) or reach out to the maintainers.
+If you have questions, please [open an issue](https://github.com/Chenxicheng/cc-proxy/issues) or reach out to the maintainers.
 
 Thank you for contributing! 🙏

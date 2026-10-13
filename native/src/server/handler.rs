@@ -25,7 +25,7 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
-        "adapter": "claude-adapter",
+        "adapter": "cc-proxy",
         "dropped_jsonl_records": state.storage.dropped_count(),
     }))
 }

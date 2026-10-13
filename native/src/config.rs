@@ -70,7 +70,7 @@ impl AdapterConfig {
                 )),
                 Ok(value) => Ok(value),
                 Err(env::VarError::NotPresent) => Err(format!(
-                    "Environment variable {name} configured by apiKeyEnv is not set; set it and restart claude-adapter"
+                    "Environment variable {name} configured by apiKeyEnv is not set; set it and restart cc-proxy"
                 )),
                 Err(env::VarError::NotUnicode(_)) => Err(format!(
                     "Environment variable {name} configured by apiKeyEnv is not valid Unicode"

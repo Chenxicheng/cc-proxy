@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1725" height="720" viewBox="0 0 1725 720">
+  <defs>
+    <pattern id="dots" width="14" height="14" patternUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="2.5" fill="#6B6B6B" />
+    </pattern>
+  </defs>
+  <g fill="none" stroke="#6B6B6B" stroke-width="8">
+    <rect x="103" y="115" width="1325" height="485" />
+    <rect x="1430" y="235" width="190" height="245" />
+  </g>
+  <rect x="1450" y="255" width="150" height="205" fill="url(#dots)" />
+  <text
+    x="765"
+    y="420"
+    fill="#D97757"
+    font-family="Avenir Next, Helvetica Neue, Arial, sans-serif"
+    font-size="190"
+    font-weight="300"
+    letter-spacing="3"
+    text-anchor="middle"
+  >cc-proxy</text>
+</svg>

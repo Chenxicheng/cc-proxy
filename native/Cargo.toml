@@ -1,5 +1,5 @@
 [package]
-name = "claude-adapter-native"
+name = "cc-proxy-native"
 version = "2.2.0"
 edition = "2024"
 rust-version = "1.98"

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>cc-switch 与 claude-adapter：Request / Response 转换对比</title>
+  <title>cc-switch 与 cc-proxy：Request / Response 转换对比</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.65; }
     body { max-width: 1160px; margin: 0 auto; padding: 30px 22px 70px; color: light-dark(#17212b, #e7edf3); background: light-dark(#f6f8fb, #111820); }
@@ -35,14 +35,14 @@
 </head>
 <body>
   <main>
-    <h1>cc-switch 与 claude-adapter<br>Request / Response 转换对比</h1>
+    <h1>cc-switch 与 cc-proxy<br>Request / Response 转换对比</h1>
     <p class="lead">代码快照：cc-switch <code>f2537fd</code>；本项目 <code>63a66b6</code> 加当前工作区修改。范围：Claude Code 的 Anthropic Messages 请求，经 OpenAI Chat Completions 或 Responses 上游，再转换回 Anthropic 响应。2026-09-23。</p>
 
     <div class="summary"><strong>结论：</strong>cc-switch 胜在协议覆盖、多模态与供应商适配；本项目胜在 Chat Completions 单一路径的输入校验、失败可见性和流终止约束。若只评估共同的 Chat 流式转换，我更推荐本项目的处理方式；两者没有同条件性能实测，不能给出速度排名。</div>
 
     <div class="grid" aria-label="双方主要优点与不足">
       <section class="card"><h3>cc-switch</h3><span class="tag">主要优点</span><ul><li>同一 Claude 入口支持 Chat Completions、Responses、Gemini 等格式；Responses 路径处理 reasoning 回传和 hosted tools。</li><li>Chat 路径支持普通图片，并把 <code>tool_result</code> 图片转成后续 user 消息；工具 schema 会做上游兼容清理。</li><li>流式 usage 等待末尾统计，处理重复 <code>finish_reason</code>；客户端 usage 可拆分缓存 token。</li></ul><span class="tag risk">主要不足</span><ul><li>Chat 非流式工具参数 JSON 解析失败会回退为 <code>{}</code>；未知结束原因回退为 <code>end_turn</code>，可能隐藏上游协议问题。</li><li>覆盖多个协议和供应商，使转换行为依赖路由与 provider 选项，定位问题需要跟踪更多分支。</li></ul></section>
-      <section class="card"><h3>claude-adapter</h3><span class="tag">主要优点</span><ul><li>Request 先校验必需字段和内容结构；Response 对 malformed tool arguments、缺失 tool name、未知结束原因返回明确错误。</li><li>SSE 对并行工具、分片名称、完整 JSON 参数、结束信号建立明确约束；错误流不会再发送成功结束事件。</li><li>遵守旧版 TypeScript 的 Chat 请求 wire shape，并保留 GLM/Qwen 的已选参数，行为边界容易验证。</li></ul><span class="tag risk">主要不足</span><ul><li>只支持 Anthropic Messages ↔ Chat Completions；图片及工具结果图片直接返回 400。</li><li>不清理工具 JSON schema；客户端 usage 只返回 input/output，总缓存明细保留在内部 JSONL。</li></ul></section>
+      <section class="card"><h3>cc-proxy</h3><span class="tag">主要优点</span><ul><li>Request 先校验必需字段和内容结构；Response 对 malformed tool arguments、缺失 tool name、未知结束原因返回明确错误。</li><li>SSE 对并行工具、分片名称、完整 JSON 参数、结束信号建立明确约束；错误流不会再发送成功结束事件。</li><li>遵守旧版 TypeScript 的 Chat 请求 wire shape，并保留 GLM/Qwen 的已选参数，行为边界容易验证。</li></ul><span class="tag risk">主要不足</span><ul><li>只支持 Anthropic Messages ↔ Chat Completions；图片及工具结果图片直接返回 400。</li><li>不清理工具 JSON schema；客户端 usage 只返回 input/output，总缓存明细保留在内部 JSONL。</li></ul></section>
     </div>
 
     <h2>逐项比较</h2>

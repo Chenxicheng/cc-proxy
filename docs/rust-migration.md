@@ -2,9 +2,9 @@
 
 ## Product boundary
 
-`claude-adapter` 2.0 is a CLI product. One self-contained npm package owns offline installation, configuration prompts, embedded native binary selection, Claude settings updates, startup feedback, and signal forwarding. The Rust binary owns the listener, validation, upstream HTTP, Anthropic/OpenAI conversion, SSE, tools, usage/error storage, and runtime logging. There is no Node proxy fallback or JavaScript library API.
+`claude-adapter` 2.0 was a CLI product. One self-contained npm package owned offline installation, configuration prompts, embedded native binary selection, Claude settings updates, startup feedback, and signal forwarding. The Rust binary owned the listener, validation, upstream HTTP, Anthropic/OpenAI conversion, SSE, tools, usage/error storage, and runtime logging. There was no Node proxy fallback or JavaScript library API.
 
-The existing `~/.claude-adapter/config.json` shape and CLI flags remain valid. Credentials use exactly one of the existing plaintext `apiKey` field or `apiKeyEnv`, which stores only a portable environment variable name. Rust resolves environment-backed credentials once at startup from the inherited process environment and never persists the value. The native process receives `--config <absolute-path>` and `--port <preferred>`, binds the first available loopback port, then prints one `CLAUDE_ADAPTER_READY=<json>` line after the listener is active. Node forwards Unix signals directly; on Windows it requests the same graceful drain through the child stdin pipe before using the 10-second forced-stop fallback.
+The existing `~/.claude-adapter/config.json` shape and CLI flags remain valid. Credentials use exactly one of the existing plaintext `apiKey` field or `apiKeyEnv`, which stores only a portable environment variable name. Rust resolves environment-backed credentials once at startup from the inherited process environment and never persists the value. The native process receives `--config <absolute-path>` and `--port <preferred>`, binds the first available loopback port, then prints one `CC_PROXY_READY=<json>` line after the listener is active. Node forwards Unix signals directly; on Windows it requests the same graceful drain through the child stdin pipe before using the 10-second forced-stop fallback.
 
 ## Protocol requirements
 

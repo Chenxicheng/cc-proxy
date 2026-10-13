@@ -20,8 +20,8 @@ const binaryDir = join(rootDir, 'bin');
 const packageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
 const version = packageJson.version;
 const platforms = [
-  ['linux-x64-gnu', 'claude-adapter-native'],
-  ['win32-x64-msvc', 'claude-adapter-native.exe'],
+  ['linux-x64-gnu', 'cc-proxy-native'],
+  ['win32-x64-msvc', 'cc-proxy-native.exe'],
 ];
 
 function run(command, args, options = {}) {
@@ -125,7 +125,7 @@ function validateCleanInstall() {
   if (process.platform !== 'linux' || process.arch !== 'x64') {
     throw new Error('Clean install validation requires Linux x64');
   }
-  const directory = mkdtempSync(join(tmpdir(), 'claude-adapter-install-'));
+  const directory = mkdtempSync(join(tmpdir(), 'cc-proxy-install-'));
   try {
     writeFileSync(join(directory, 'package.json'), '{"private":true}\n');
     const configPath = join(directory, 'config.json');

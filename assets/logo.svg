@@ -12,5 +12,5 @@
   <text x="75" y="270"><tspan class="dim">│ </tspan><tspan class="brand">┌─┐┬  ┌─┐┬ ┬┌┬┐┌─┐</tspan><tspan class="dim"> ├──┐</tspan></text>
   <text x="75" y="390"><tspan class="dim">│ </tspan><tspan class="brand">│  │  ├─┤│ │ ││├┤ </tspan><tspan class="dim"> │▓▓│</tspan></text>
   <text x="75" y="510"><tspan class="dim">│ </tspan><tspan class="brand">└─┘┴─┘┴ ┴└─┘─┴┘└─┘</tspan><tspan class="dim"> ├──┘</tspan></text>
-  <text x="75" y="630" class="dim">└──────•ADAPTER──────┘</text>
+  <text x="75" y="630" class="dim">└──────•cc-proxy──────┘</text>
 </svg>

@@ -28,7 +28,7 @@ What actually happened.
 
 - **OS:** [e.g., Windows 11, macOS 14, Ubuntu 22.04]
 - **Node.js version:** [e.g., 20.10.0]
-- **claude-adapter version:** [e.g., 1.0.0]
+- **cc-proxy version:** [e.g., 1.0.0]
 - **OpenAI API provider:** [e.g., OpenAI, Azure, Ollama]
 
 ## Logs

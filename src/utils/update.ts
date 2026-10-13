@@ -41,7 +41,7 @@ function fetchLatestVersion(): Promise<string | null> {
     return new Promise((resolve) => {
         const timeout = setTimeout(() => resolve(null), 3000); // 3s timeout
 
-        https.get('https://registry.npmjs.org/claude-adapter/latest', (res) => {
+        https.get('https://registry.npmjs.org/cc-proxy/latest', (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {

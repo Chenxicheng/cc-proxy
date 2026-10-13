@@ -132,6 +132,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc-proxy-native"
+version = "2.2.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "base64",
+ "bytes",
+ "chrono",
+ "eventsource-stream",
+ "futures-util",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "url",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -163,28 +185,6 @@ dependencies = [
  "iana-time-zone",
  "num-traits",
  "windows-link",
-]
-
-[[package]]
-name = "claude-adapter-native"
-version = "2.2.0"
-dependencies = [
- "async-stream",
- "axum",
- "base64",
- "bytes",
- "chrono",
- "eventsource-stream",
- "futures-util",
- "rand 0.9.5",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
- "tower-http",
- "url",
 ]
 
 [[package]]

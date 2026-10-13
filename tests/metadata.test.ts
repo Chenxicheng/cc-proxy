@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const TEST_DIR = join(tmpdir(), 'claude-adapter-metadata-test-' + Date.now());
+const TEST_DIR = join(tmpdir(), 'cc-proxy-metadata-test-' + Date.now());
 
 // Mock the home directory to use test directory
 jest.mock('os', () => {

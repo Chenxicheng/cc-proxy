@@ -12,7 +12,7 @@ const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(currentDirectory, '..', '..');
 const springConfig = required(args, 'spring-config');
 const binary = path.resolve(
-  args['adapter-binary'] ?? path.join(root, '../.cc-proxy-target/release/claude-adapter-native')
+  args['adapter-binary'] ?? path.join(root, '../.cc-proxy-target/release/cc-proxy-native')
 );
 const resultsDir = path.resolve(args['results-dir'] ?? path.join(currentDirectory, 'results'));
 const withClaude = args['with-claude'] === true;
@@ -33,14 +33,14 @@ try {
   const spring = parseSpringOpenAi(await readFile(springConfig, 'utf8'));
   const upstreamRoot = stripTrailingSlash(args['upstream-root'] ?? defaultUpstreamRoot);
   result.model = spring.model;
-  credentialVariable = `CLAUDE_ADAPTER_E2E_${process.pid}_${Date.now()}`;
+  credentialVariable = `CC_PROXY_E2E_${process.pid}_${Date.now()}`;
   result.tests.upstream = await testUpstream(
     `${upstreamRoot}${spring.completionsPath}`,
     spring.apiKey,
     spring.model
   );
 
-  temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'claude-adapter-real-e2e-'));
+  temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'cc-proxy-real-e2e-'));
   probe = await startProbe(`${upstreamRoot}${spring.completionsPath}`);
   const adapterConfig = path.join(temporaryDirectory, 'config.json');
   const adapterBaseUrl = `${probe.url}${spring.completionsPath.replace(/\/chat\/completions$/, '')}`;
@@ -596,9 +596,9 @@ async function startAdapter(binaryPath, config, credentialName, credential) {
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
       for (const line of stdout.split('\n'))
-        if (line.startsWith('CLAUDE_ADAPTER_READY=')) {
+        if (line.startsWith('CC_PROXY_READY=')) {
           try {
-            finish(null, JSON.parse(line.slice('CLAUDE_ADAPTER_READY='.length)).url);
+            finish(null, JSON.parse(line.slice('CC_PROXY_READY='.length)).url);
           } catch (error) {
             finish(error);
           }

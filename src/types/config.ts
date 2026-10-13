@@ -1,4 +1,4 @@
-// Configuration types for claude-adapter
+// Configuration types for cc-proxy
 
 interface AdapterConfigBase {
     baseUrl: string;
