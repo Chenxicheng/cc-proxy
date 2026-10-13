@@ -36,10 +36,15 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - run: cargo test --manifest-path native/Cargo.toml
       - run: cargo build --manifest-path native/Cargo.toml --release
+      - name: Stage native artifact
+        shell: bash
+        run: |
+          mkdir -p native-artifact
+          cp "../.cc-proxy-target/release/${{ matrix.binary }}" native-artifact/
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.package }}
-          path: ../.cc-proxy-target/release/${{ matrix.binary }}
+          path: native-artifact/${{ matrix.binary }}
           if-no-files-found: error
 
   release:
