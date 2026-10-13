@@ -13,6 +13,8 @@ interface NativeTarget {
 }
 
 const NATIVE_TARGETS: Record<string, NativeTarget> = {
+  'darwin-arm64': { directory: 'darwin-arm64', binary: 'cc-proxy-native' },
+  'darwin-x64': { directory: 'darwin-x64', binary: 'cc-proxy-native' },
   'linux-x64': { directory: 'linux-x64-gnu', binary: 'cc-proxy-native' },
   'win32-x64': { directory: 'win32-x64-msvc', binary: 'cc-proxy-native.exe' },
 };
@@ -30,7 +32,7 @@ export function nativeTargetForPlatform(
   const target = NATIVE_TARGETS[`${platform}-${arch}`];
   if (!target) {
     throw new Error(
-      `Unsupported platform ${platform}-${arch}. Supported platforms: Linux glibc x64 and Windows x64.`
+      `Unsupported platform ${platform}-${arch}. Supported platforms: macOS x64/arm64, Linux glibc x64, and Windows x64.`
     );
   }
   if (platform === process.platform && platform === 'linux' && !hasGlibc()) {

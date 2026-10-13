@@ -67,6 +67,8 @@ afterEach(() => {
 
 describe('native platform selection', () => {
   it.each([
+    ['darwin', 'arm64', 'darwin-arm64', 'cc-proxy-native'],
+    ['darwin', 'x64', 'darwin-x64', 'cc-proxy-native'],
     ['linux', 'x64', 'linux-x64-gnu', 'cc-proxy-native'],
     ['win32', 'x64', 'win32-x64-msvc', 'cc-proxy-native.exe'],
   ] as const)('maps %s-%s to its bundled binary', (platform, arch, directory, binary) => {
@@ -74,8 +76,8 @@ describe('native platform selection', () => {
   });
 
   it('rejects unsupported targets with an actionable message', () => {
-    expect(() => nativeTargetForPlatform('darwin', 'arm64')).toThrow(
-      'Supported platforms: Linux glibc x64 and Windows x64.'
+    expect(() => nativeTargetForPlatform('linux', 'arm64')).toThrow(
+      'Supported platforms: macOS x64/arm64, Linux glibc x64, and Windows x64.'
     );
   });
 

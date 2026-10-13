@@ -44,6 +44,12 @@ jobs:
           - runner: ubuntu-24.04
             package: linux-x64-gnu
             binary: cc-proxy-native
+          - runner: macos-15-intel
+            package: darwin-x64
+            binary: cc-proxy-native
+          - runner: macos-14
+            package: darwin-arm64
+            binary: cc-proxy-native
           - runner: windows-2025
             package: win32-x64-msvc
             binary: cc-proxy-native.exe
@@ -73,28 +79,3 @@ jobs:
           name: native-${{ matrix.package }}
           path: ../.cc-proxy-target/release/${{ matrix.binary }}
           if-no-files-found: error
-
-  offline-package:
-    name: Offline npm package
-    needs: native-platforms
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-          cache: npm
-      - run: npm ci
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Stage offline binaries
-        run: |
-          mkdir -p bin/linux-x64-gnu bin/win32-x64-msvc
-          cp artifacts/native-linux-x64-gnu/cc-proxy-native bin/linux-x64-gnu/
-          cp artifacts/native-win32-x64-msvc/cc-proxy-native.exe bin/win32-x64-msvc/
-          chmod +x bin/linux-x64-gnu/cc-proxy-native
-      - name: Package and clean-install
-        env:
-          CLEAN_INSTALL: '1'
-        run: npm run release:assets

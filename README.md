@@ -11,6 +11,16 @@
 
 See [docs/API.md](docs/API.md) for the complete request, response, streaming, and degradation rules.
 
+## Installation
+
+Each GitHub Release provides one offline npm tarball containing the CLI, production dependencies, and native binaries for macOS Intel (`darwin-x64`), macOS Apple Silicon (`darwin-arm64`), Linux glibc x64, and Windows x64. Install the release tarball with:
+
+```bash
+npm install -g ./cc-proxy-<version>.tgz
+```
+
+GitHub Actions creates this tarball only after the release tag matches `package.json`'s version; local development commands do not produce a release package.
+
 ## Development checks
 
 Run commands from the repository root:

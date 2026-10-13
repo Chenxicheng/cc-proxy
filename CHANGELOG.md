@@ -10,6 +10,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Added
 
+- Build release packages only in GitHub Actions and bundle native binaries for macOS Intel, macOS Apple Silicon, Linux x64, and Windows x64.
 - Color fullscreen service status, model configuration and request logs using the reference monitor's semantic palette.
 
 - Log validated streaming completion and mirror request/response failures to the fullscreen terminal. Persist early request rejections and attach request IDs to usage records.

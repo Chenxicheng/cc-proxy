@@ -20,6 +20,12 @@ jobs:
           - runner: ubuntu-24.04
             package: linux-x64-gnu
             binary: cc-proxy-native
+          - runner: macos-15-intel
+            package: darwin-x64
+            binary: cc-proxy-native
+          - runner: macos-14
+            package: darwin-arm64
+            binary: cc-proxy-native
           - runner: windows-2025
             package: win32-x64-msvc
             binary: cc-proxy-native.exe
@@ -57,10 +63,12 @@ jobs:
           path: artifacts
       - name: Stage offline binaries
         run: |
-          mkdir -p bin/linux-x64-gnu bin/win32-x64-msvc
+          mkdir -p bin/linux-x64-gnu bin/darwin-x64 bin/darwin-arm64 bin/win32-x64-msvc
           cp artifacts/native-linux-x64-gnu/cc-proxy-native bin/linux-x64-gnu/
+          cp artifacts/native-darwin-x64/cc-proxy-native bin/darwin-x64/
+          cp artifacts/native-darwin-arm64/cc-proxy-native bin/darwin-arm64/
           cp artifacts/native-win32-x64-msvc/cc-proxy-native.exe bin/win32-x64-msvc/
-          chmod +x bin/linux-x64-gnu/cc-proxy-native
+          chmod +x bin/linux-x64-gnu/cc-proxy-native bin/darwin-x64/cc-proxy-native bin/darwin-arm64/cc-proxy-native
       - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -74,13 +82,62 @@ jobs:
       - run: cargo fmt --manifest-path native/Cargo.toml --check
       - run: cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path native/Cargo.toml
-      - name: Build package artifacts and clean-install test
-        env:
-          CLEAN_INSTALL: '1'
+      - name: Build, validate, and clean-install the offline package
         run: |
-          npm run release:assets
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          zip -j "release/cc-proxy-$PACKAGE_VERSION-offline.zip" "release/cc-proxy-$PACKAGE_VERSION.tgz"
+          npm run build:release
+          mkdir release
+          npm pack --pack-destination release
+          PACKAGE_TARBALL="release/cc-proxy-$PACKAGE_VERSION.tgz"
+          for path in \
+            package/bin/linux-x64-gnu/cc-proxy-native \
+            package/bin/darwin-x64/cc-proxy-native \
+            package/bin/darwin-arm64/cc-proxy-native \
+            package/bin/win32-x64-msvc/cc-proxy-native.exe; do
+            tar -tzf "$PACKAGE_TARBALL" | grep -Fx "$path"
+          done
+          INSTALL_DIR="$(mktemp -d)"
+          trap 'rm -rf "$INSTALL_DIR"' EXIT
+          printf '{"private":true}\n' > "$INSTALL_DIR/package.json"
+          npm install --offline --ignore-scripts --no-audit --no-fund --cache "$INSTALL_DIR/npm-cache" "$GITHUB_WORKSPACE/$PACKAGE_TARBALL" --prefix "$INSTALL_DIR"
+          node "$INSTALL_DIR/node_modules/cc-proxy/dist/cli.js" --version
+          cat > "$INSTALL_DIR/verify-install.cjs" <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          const { writeFileSync } = require('node:fs');
+          const { join } = require('node:path');
+
+          const installDir = process.argv[2];
+          const configPath = join(installDir, 'config.json');
+          writeFileSync(
+            configPath,
+            JSON.stringify({
+              baseUrl: 'http://127.0.0.1:1/v1',
+              apiKey: 'clean-install',
+              models: { opus: 'mock', sonnet: 'mock', haiku: 'mock' },
+            })
+          );
+          const native = require(join(installDir, 'node_modules', 'cc-proxy', 'dist', 'native.js'));
+          (async () => {
+            const server = await native.startNativeServer(configPath, 0);
+            const stopStarted = Date.now();
+            await server.stop();
+            if (Date.now() - stopStarted >= 2000) {
+              throw new Error('native graceful shutdown exceeded 2 seconds');
+            }
+            const failed = spawnSync(native.resolveNativeBinary(), [
+              '--config',
+              join(installDir, 'missing.json'),
+              '--port',
+              '0',
+            ]);
+            if (failed.status === 0) throw new Error('native startup failure was not reported');
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+          node "$INSTALL_DIR/verify-install.cjs" "$INSTALL_DIR"
+          git archive --format=zip --output "release/cc-proxy-v$PACKAGE_VERSION-source.zip" HEAD
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

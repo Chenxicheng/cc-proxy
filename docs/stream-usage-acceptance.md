@@ -27,7 +27,7 @@ cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
 git diff --check
 ```
 
-`npm run test:protocol` requires the fixed Git object (CI checks out full history) and the release binary. `ADAPTER_BINARY` can select a platform build. Native-platform CI runs it on Linux x64 and Windows x64; a local macOS pass is not proof of either target.
+`npm run test:protocol` requires the fixed Git object (CI checks out full history) and the release binary. `ADAPTER_BINARY` can select a platform build. Native-platform CI runs it on Linux x64, Windows x64, macOS Intel x64, and macOS Apple Silicon arm64; a local pass is not proof of the other targets.
 
 ## Performance comparison
 
