@@ -346,7 +346,7 @@ try {
     ],
   });
   assert.deepEqual(lastOutboundRequest.messages.slice(-2), [
-    { role: 'tool', tool_call_id: 'toolu_1', content: 'Captured\n[Image output follows in the next user message.]' },
+    { role: 'tool', tool_call_id: 'toolu_1', content: 'Captured\n[Image 1 follows in the next user message.]' },
     { role: 'user', content: [
       { type: 'text', text: '[Image from tool_call_id: toolu_1]' },
       { type: 'image_url', image_url: { url: 'https://example.com/screen.png' } },

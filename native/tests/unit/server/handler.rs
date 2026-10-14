@@ -16,6 +16,110 @@ fn error_record_preserves_sanitized_upstream_details() {
 }
 
 #[tokio::test]
+async fn nonstream_upstream_rejection_of_none_is_returned_without_retry() {
+    use axum::{Router, routing::post};
+    use std::sync::{Arc, Mutex};
+
+    let observed = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let requests = observed.clone();
+    let upstream = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/v1/chat/completions",
+                post(move |Json(request): Json<Value>| {
+                    let requests = requests.clone();
+                    async move {
+                        requests.lock().unwrap().push(request);
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": {"message": "none unsupported"}})),
+                        )
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let (storage, writer) = crate::storage::Storage::start(directory.path().to_path_buf());
+    let state = AppState {
+        config: crate::config::AdapterConfig {
+            base_url: upstream_url,
+            api_key: Some("local-test-key".into()),
+            api_key_env: None,
+            upstream_headers: None,
+            upstream_capabilities: Default::default(),
+        },
+        client: reqwest::Client::new(),
+        storage,
+    };
+    let body = json!({
+        "model": "vendor/custom", "max_tokens": 10,
+        "thinking": {"type": "disabled"},
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let response = messages(State(state.clone()), Ok(Bytes::from(body.to_string()))).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("none unsupported"));
+    {
+        let requests = observed.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["reasoning_effort"], "none");
+        assert_eq!(requests[0]["max_completion_tokens"], 10);
+    }
+    drop(state);
+    writer.await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn invalid_upstream_json_returns_bad_gateway() {
+    use axum::{Router, routing::post};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/v1/chat/completions", post(|| async { "not json" })),
+        )
+        .await
+        .unwrap();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let (storage, writer) = crate::storage::Storage::start(directory.path().to_path_buf());
+    let state = AppState {
+        config: crate::config::AdapterConfig {
+            base_url: upstream_url,
+            api_key: Some("local-test-key".into()),
+            api_key_env: None,
+            upstream_headers: None,
+            upstream_capabilities: Default::default(),
+        },
+        client: reqwest::Client::new(),
+        storage,
+    };
+    let body = json!({"model": "custom", "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hello"}]});
+    let response = messages(State(state.clone()), Ok(Bytes::from(body.to_string()))).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("Invalid upstream JSON"));
+    drop(state);
+    writer.await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
 async fn qwen_nonstreaming_request_uses_streamed_upstream_and_returns_json() {
     use std::sync::{Arc, Mutex};
 

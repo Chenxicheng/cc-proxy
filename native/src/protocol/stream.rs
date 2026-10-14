@@ -423,7 +423,7 @@ struct StreamState {
 impl StreamState {
     fn new(model: String, provider: String, request_id: String, tool_names: Vec<String>) -> Self {
         Self {
-            message_id: format!("msg_{}", Utc::now().timestamp_millis()),
+            message_id: format!("msg_{request_id}"),
             request_id,
             model,
             response_model: None,

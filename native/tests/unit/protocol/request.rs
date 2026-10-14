@@ -1,8 +1,12 @@
 use super::*;
 use axum::http::StatusCode;
 
-fn convert_request(body: &Value, base_url: &str) -> Result<Value, AppError> {
-    convert_request_with_mode(body, base_url, AssistantPrefillMode::Unsupported)
+fn convert_request(body: &Value, _base_url: &str) -> Result<Value, AppError> {
+    convert_request_with_mode(
+        body,
+        AssistantPrefillMode::Unsupported,
+        MaxTokensField::default(),
+    )
 }
 
 #[test]
@@ -14,8 +18,8 @@ fn matches_shared_request_fixtures() {
     for fixture in fixtures.as_array().unwrap() {
         let actual = convert_request_with_mode(
             &fixture["input"],
-            "https://api.openai.com/v1",
             AssistantPrefillMode::Native,
+            MaxTokensField::default(),
         )
         .unwrap();
         assert_eq!(actual, fixture["expected"], "fixture {}", fixture["name"]);
@@ -66,8 +70,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
 
     let converted = convert_request_with_mode(
         &body,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::ContinueFinalMessage,
+        MaxTokensField::default(),
     )
     .unwrap();
     assert_eq!(
@@ -85,8 +89,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
     parallel["tool_choice"]["disable_parallel_tool_use"] = json!(false);
     let parallel = convert_request_with_mode(
         &parallel,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::Native,
+        MaxTokensField::default(),
     )
     .unwrap();
     assert_eq!(parallel["parallel_tool_calls"], true);
@@ -94,8 +98,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
     strict["tools"][0]["strict"] = json!(true);
     let error = convert_request_with_mode(
         &strict,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::Native,
+        MaxTokensField::default(),
     )
     .unwrap_err();
     assert!(error.message.contains("tools[0].strict"));
@@ -106,8 +110,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
     });
     let converted = convert_request_with_mode(
         &unicode,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::Native,
+        MaxTokensField::default(),
     )
     .unwrap();
     assert_eq!(converted["messages"][0]["content"], "🙂🙂");
@@ -119,8 +123,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
     });
     let converted = convert_request_with_mode(
         &ordinary,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::ContinueFinalMessage,
+        MaxTokensField::default(),
     )
     .unwrap();
     assert!(converted.get("continue_final_message").is_none());
@@ -162,7 +166,7 @@ fn preserves_reasoning_only_for_glm_and_qwen_tool_history() {
 }
 
 #[test]
-fn rejects_structured_output_and_preserves_native_assistant_prefill() {
+fn rejects_incomplete_structured_output_and_preserves_native_assistant_prefill() {
     let body = json!({
         "model": "gpt-5", "max_tokens": 10,
         "messages": [
@@ -175,8 +179,8 @@ fn rejects_structured_output_and_preserves_native_assistant_prefill() {
     });
     let error = convert_request_with_mode(
         &body,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::Native,
+        MaxTokensField::default(),
     )
     .unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -188,8 +192,8 @@ fn rejects_structured_output_and_preserves_native_assistant_prefill() {
     });
     let converted = convert_request_with_mode(
         &only_prefill,
-        "https://api.openai.com/v1",
         AssistantPrefillMode::Native,
+        MaxTokensField::default(),
     )
     .unwrap();
     assert_eq!(converted["messages"][0]["content"], "```");
@@ -219,7 +223,6 @@ fn repairs_duplicate_tool_ids_and_matches_results_in_order() {
                 {"type": "tool_use", "id": "duplicate_tool_id", "name": "first", "input": {}},
                 {"type": "tool_use", "id": "duplicate_tool_id", "name": "second", "input": {}}
             ]},
-            {"role": "user", "content": null},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "duplicate_tool_id", "content": "one"},
                 {"type": "tool_result", "tool_use_id": "duplicate_tool_id", "content": "two"}
@@ -363,7 +366,11 @@ fn rejects_tool_results_without_a_preceding_tool_use() {
     });
     let error = convert_request(&body, "https://api.openai.com/v1").unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("no preceding tool_use"));
+    assert!(
+        error
+            .message
+            .contains("no immediately preceding assistant tool_use")
+    );
 }
 
 #[test]
@@ -454,6 +461,116 @@ fn maps_tool_result_text_and_ignores_thinking_history() {
         converted["messages"][2],
         json!({"role": "user", "content": "continue"})
     );
+}
+
+#[test]
+fn token_field_depends_on_configuration_not_model_or_url() {
+    let body = json!({
+        "model": "vendor/custom-42", "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let default = convert_request(&body, "https://gateway.openai.azure.com/v1").unwrap();
+    assert_eq!(default["max_completion_tokens"], 1);
+    assert!(default.get("max_tokens").is_none());
+    let older = convert_request_with_mode(
+        &body,
+        AssistantPrefillMode::Unsupported,
+        MaxTokensField::MaxTokens,
+    )
+    .unwrap();
+    assert_eq!(older["max_tokens"], 1);
+    assert!(older.get("max_completion_tokens").is_none());
+}
+
+#[test]
+fn generic_thinking_maps_without_model_name_guessing() {
+    let mut body = json!({
+        "model": "vendor/custom-42", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    body["output_config"] = json!({"effort": "max"});
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "max"
+    );
+    body.as_object_mut().unwrap().remove("output_config");
+    body["thinking"] = json!({"type": "enabled", "budget_tokens": 2000});
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "low"
+    );
+    body["thinking"] = json!({"type": "adaptive"});
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "xhigh"
+    );
+    body["thinking"] = json!({"type": "disabled"});
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "none"
+    );
+    body["output_config"] = json!({"effort": "high"});
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap_err()
+            .message
+            .contains("conflicts")
+    );
+}
+
+#[test]
+fn strict_schema_precheck_rejects_lossy_conversion() {
+    let mut body = json!({
+        "model": "vendor/custom-42", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "JSON"}],
+        "output_config": {"format": {"type": "json_schema", "schema": {
+            "type": "object", "properties": {"answer": {"type": "string"}},
+            "required": ["answer"], "additionalProperties": false
+        }}}
+    });
+    let converted = convert_request(&body, "unused").unwrap();
+    assert_eq!(converted["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(
+        converted["response_format"]["json_schema"]["schema"],
+        body["output_config"]["format"]["schema"]
+    );
+    body["output_config"]["format"]["schema"]["required"] = json!([]);
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap_err()
+            .message
+            .contains("required")
+    );
+    body["output_config"]["format"]["schema"]["required"] = json!(["answer"]);
+    body["output_config"]["format"]["schema"]["additionalProperties"] = json!(true);
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap_err()
+            .message
+            .contains("strict")
+    );
+}
+
+#[test]
+fn tool_results_must_complete_the_immediately_following_round() {
+    let assistant = json!({"role": "assistant", "content": [
+        {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {}}
+    ]});
+    let result = json!({"type": "tool_result", "tool_use_id": "call_1", "content": "done"});
+    for messages in [
+        json!([assistant, {"role": "user", "content": "later"},
+            {"role": "user", "content": [result]}]),
+        json!([assistant, {"role": "user", "content": [
+            {"type": "text", "text": "before"}, result
+        ]}]),
+        json!([assistant, {"role": "user", "content": []}]),
+    ] {
+        let body = json!({"model": "custom", "max_tokens": 20, "messages": messages});
+        assert_eq!(
+            convert_request(&body, "unused").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
 
 #[test]

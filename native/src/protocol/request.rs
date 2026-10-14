@@ -8,7 +8,10 @@ use rand::Rng;
 use serde_json::{Map, Value, json};
 use url::Url;
 
-use crate::{config::AssistantPrefillMode, error::AppError};
+use crate::{
+    config::{AssistantPrefillMode, MaxTokensField},
+    error::AppError,
+};
 
 const BILLING_HEADER: &str = "x-anthropic-billing-header:";
 pub fn validate_request(body: &Value) -> Result<(), AppError> {
@@ -346,10 +349,80 @@ fn validate_unit_interval(object: &Map<String, Value>, field: &str, errors: &mut
     }
 }
 
+fn validate_tool_rounds(messages: &[Value]) -> Result<(), AppError> {
+    let mut pending: Option<HashMap<&str, usize>> = None;
+    for (message_index, message) in messages.iter().enumerate() {
+        let role = message["role"].as_str().expect("validated role");
+        let blocks = message.get("content").and_then(Value::as_array);
+        if let Some(mut expected) = pending.take() {
+            if role != "user" {
+                return Err(AppError::bad_request(format!(
+                    "messages[{message_index}]: tool_result must immediately follow assistant tool_use in a user message"
+                )));
+            }
+            let mut past_results = false;
+            for (block_index, block) in blocks.into_iter().flatten().enumerate() {
+                if block["type"] == "tool_result" {
+                    if past_results {
+                        return Err(AppError::bad_request(format!(
+                            "messages[{message_index}].content[{block_index}]: tool_result must precede user text and images"
+                        )));
+                    }
+                    let id = block["tool_use_id"]
+                        .as_str()
+                        .expect("validated tool_use_id");
+                    let Some(remaining) = expected.get_mut(id) else {
+                        return Err(AppError::bad_request(format!(
+                            "messages[{message_index}].content[{block_index}].tool_use_id: no matching tool_use in the immediately preceding assistant message"
+                        )));
+                    };
+                    if *remaining == 0 {
+                        return Err(AppError::bad_request(format!(
+                            "messages[{message_index}].content[{block_index}].tool_use_id: duplicate tool_result"
+                        )));
+                    }
+                    *remaining -= 1;
+                } else {
+                    past_results = true;
+                }
+            }
+            if expected.values().any(|remaining| *remaining != 0) {
+                return Err(AppError::bad_request(format!(
+                    "messages[{message_index}]: missing tool_result for immediately preceding assistant tool_use"
+                )));
+            }
+        } else if blocks
+            .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "tool_result"))
+        {
+            return Err(AppError::bad_request(format!(
+                "messages[{message_index}]: tool_result has no immediately preceding assistant tool_use"
+            )));
+        }
+        if role == "assistant" {
+            let mut calls = HashMap::new();
+            for block in blocks.into_iter().flatten() {
+                if block["type"] == "tool_use" {
+                    let id = block["id"].as_str().expect("validated tool_use id");
+                    *calls.entry(id).or_insert(0) += 1;
+                }
+            }
+            if !calls.is_empty() {
+                pending = Some(calls);
+            }
+        }
+    }
+    if pending.is_some() {
+        return Err(AppError::bad_request(
+            "messages: final assistant tool_use is missing its following user tool_result",
+        ));
+    }
+    Ok(())
+}
+
 pub fn convert_request_with_mode(
     body: &Value,
-    base_url: &str,
     assistant_prefill_mode: AssistantPrefillMode,
+    max_tokens_field: MaxTokensField,
 ) -> Result<Value, AppError> {
     validate_request(body)?;
     let request = body.as_object().expect("validated request object");
@@ -360,15 +433,7 @@ pub fn convert_request_with_mode(
             )));
         }
     }
-    if request
-        .get("output_config")
-        .and_then(|value| value.get("format"))
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(AppError::bad_request(
-            "output_config.format: structured output conversion is not supported",
-        ));
-    }
+    validate_tool_rounds(request["messages"].as_array().expect("validated messages"))?;
     let model = request["model"].as_str().expect("validated model");
     let source_messages = request["messages"].as_array().expect("validated messages");
     let terminal_assistant_prefill = source_messages.last().is_some_and(has_assistant_prefill);
@@ -416,18 +481,10 @@ pub fn convert_request_with_mode(
         );
     let upstream_streaming = client_streaming || qwen_thinking;
     output.insert("stream".into(), Value::Bool(upstream_streaming));
-    let mut max_tokens = request["max_tokens"]
-        .as_u64()
-        .expect("validated max_tokens");
-    if is_azure(base_url) && max_tokens == 1 {
-        max_tokens = 32;
-    }
-    let max_field = if is_openai_reasoning(model) {
-        "max_completion_tokens"
-    } else {
-        "max_tokens"
-    };
-    output.insert(max_field.into(), Value::from(max_tokens));
+    output.insert(
+        max_tokens_field.as_str().into(),
+        request["max_tokens"].clone(),
+    );
     if upstream_streaming {
         output.insert("stream_options".into(), json!({"include_usage": true}));
     }
@@ -452,6 +509,13 @@ pub fn convert_request_with_mode(
         }
     }
     apply_model_options(request, &mut output, model)?;
+    if let Some(format) = request
+        .get("output_config")
+        .and_then(|value| value.get("format"))
+        .filter(|value| !value.is_null())
+    {
+        output.insert("response_format".into(), convert_output_format(format)?);
+    }
     if terminal_assistant_prefill
         && assistant_prefill_mode == AssistantPrefillMode::ContinueFinalMessage
     {
@@ -620,16 +684,12 @@ fn convert_user_blocks(
                 })?;
                 let (text, images) = extract_tool_result(block);
                 let is_error = block.get("is_error").and_then(Value::as_bool) == Some(true);
-                let mut text = if is_error {
+                let text = if is_error {
                     format!("Error: {text}")
                 } else {
                     text
                 };
                 if !images.is_empty() {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str("[Image output follows in the next user message.]");
                     user_parts.push(json!({"type": "text", "text": format!(
                         "[Image from tool_call_id: {resolved_id}]"
                     )}));
@@ -671,7 +731,13 @@ fn extract_tool_result(block: &Value) -> (String, Vec<Value>) {
                             .expect("validated text")
                             .to_owned(),
                     ),
-                    Some("image") => images.push(convert_image_block(part)),
+                    Some("image") => {
+                        images.push(convert_image_block(part));
+                        text.push(format!(
+                            "[Image {} follows in the next user message.]",
+                            images.len()
+                        ));
+                    }
                     _ => {}
                 }
             }
@@ -806,11 +872,89 @@ fn convert_tools(tools: &[Value]) -> Result<Value, AppError> {
     Ok(Value::Array(converted))
 }
 
+fn convert_output_format(format: &Value) -> Result<Value, AppError> {
+    if format.get("type").and_then(Value::as_str) != Some("json_schema") {
+        return Err(AppError::bad_request(
+            "output_config.format.type: only json_schema is supported",
+        ));
+    }
+    let schema = format
+        .get("schema")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::bad_request("output_config.format.schema: must be an object"))?;
+    if schema.get("type").and_then(Value::as_str) != Some("object")
+        || schema.contains_key("anyOf")
+        || schema.get("additionalProperties") != Some(&Value::Bool(false))
+    {
+        return Err(AppError::bad_request(
+            "output_config.format.schema: strict Chat schema requires a root object without anyOf and additionalProperties: false",
+        ));
+    }
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            AppError::bad_request("output_config.format.schema.properties: must be an object")
+        })?;
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            AppError::bad_request("output_config.format.schema.required: must list all properties")
+        })?;
+    let required_names: HashSet<&str> = required.iter().filter_map(Value::as_str).collect();
+    if required_names.len() != required.len()
+        || required_names.len() != properties.len()
+        || !properties
+            .keys()
+            .all(|name| required_names.contains(name.as_str()))
+    {
+        return Err(AppError::bad_request(
+            "output_config.format.schema.required: must list each property exactly once",
+        ));
+    }
+    Ok(json!({
+        "type": "json_schema",
+        "json_schema": {"name": "response", "strict": true, "schema": schema}
+    }))
+}
+
 fn apply_model_options(
     request: &Map<String, Value>,
     output: &mut Map<String, Value>,
     model: &str,
 ) -> Result<(), AppError> {
+    if let Some(thinking) = request.get("thinking").filter(|value| !value.is_null()) {
+        let kind = thinking.get("type").and_then(Value::as_str);
+        if !matches!(kind, Some("enabled" | "adaptive" | "disabled")) {
+            return Err(AppError::bad_request(
+                "thinking.type: must be enabled, adaptive, or disabled",
+            ));
+        }
+        if thinking
+            .get("budget_tokens")
+            .is_some_and(|value| !value.is_u64())
+        {
+            return Err(AppError::bad_request(
+                "thinking.budget_tokens: must be a non-negative integer",
+            ));
+        }
+    }
+    if request
+        .get("output_config")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(AppError::bad_request("output_config: must be an object"));
+    }
+    if request
+        .get("output_config")
+        .and_then(|config| config.get("effort"))
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err(AppError::bad_request(
+            "output_config.effort: must be a string",
+        ));
+    }
     let thinking_type = request
         .get("thinking")
         .and_then(|thinking| thinking.get("type"))
@@ -819,6 +963,17 @@ fn apply_model_options(
         .get("output_config")
         .and_then(|config| config.get("effort"))
         .and_then(Value::as_str);
+
+    if thinking_type == Some("disabled") && effort.is_some() {
+        return Err(AppError::bad_request(
+            "output_config.effort: conflicts with thinking.disabled",
+        ));
+    }
+    if effort.is_some_and(|value| !matches!(value, "low" | "medium" | "high" | "xhigh" | "max")) {
+        return Err(AppError::bad_request(
+            "output_config.effort: unsupported effort",
+        ));
+    }
 
     if is_glm5(model) {
         if let Some(kind) = thinking_type {
@@ -853,9 +1008,7 @@ fn apply_model_options(
         }
         return Ok(());
     }
-    if is_openai_reasoning(model)
-        && let Some(effort) = openai_effort(request, effort, thinking_type)
-    {
+    if let Some(effort) = openai_effort(request, effort, thinking_type) {
         output.insert("reasoning_effort".into(), Value::String(effort.to_owned()));
     }
     Ok(())
@@ -871,11 +1024,12 @@ fn openai_effort(
         Some("medium") => return Some("medium"),
         Some("high") => return Some("high"),
         Some("xhigh") => return Some("xhigh"),
-        Some("max") => return Some("xhigh"),
+        Some("max") => return Some("max"),
         Some(_) => return None,
         None => {}
     }
     match thinking_type {
+        Some("disabled") => Some("none"),
         Some("adaptive") => Some("xhigh"),
         Some("enabled") => match request
             .get("thinking")
@@ -903,11 +1057,6 @@ fn glm_effort(effort: Option<&str>, thinking_type: Option<&str>) -> Option<&'sta
 fn normalized(model: &str) -> String {
     model.trim().to_lowercase()
 }
-fn is_openai_reasoning(model: &str) -> bool {
-    let model = normalized(model);
-    model.starts_with("gpt-5")
-        || (model.starts_with('o') && model.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
-}
 fn is_glm5(model: &str) -> bool {
     normalized(model).starts_with("glm-5")
 }
@@ -920,15 +1069,6 @@ fn is_qwen3(model: &str) -> bool {
         .next()
         .is_some_and(|name| name.starts_with("qwen3"))
 }
-fn is_azure(base_url: &str) -> bool {
-    Url::parse(base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_lowercase))
-        .is_some_and(|host| {
-            host.ends_with(".openai.azure.com") || host.contains(".services.ai.azure.com")
-        })
-}
-
 #[cfg(test)]
 #[path = "../../tests/unit/protocol/request.rs"]
 mod tests;

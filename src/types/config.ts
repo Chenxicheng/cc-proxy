@@ -9,9 +9,11 @@ interface AdapterConfigBase {
 }
 
 export type AssistantPrefillMode = 'unsupported' | 'continue_final_message' | 'native';
+export type MaxTokensField = 'max_completion_tokens' | 'max_tokens';
 
 export interface UpstreamCapabilities {
     assistantPrefill: AssistantPrefillMode;
+    maxTokensField?: MaxTokensField;
 }
 
 export type AdapterConfig = AdapterConfigBase & (

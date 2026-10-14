@@ -10,6 +10,8 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Added
 
+- Select the Chat token-limit field through upstream configuration and forward compatible strict JSON schema output without schema rewriting.
+- Bound non-streaming upstream response time and size, and derive streaming message IDs from proxy request IDs.
 - Build release packages only in GitHub Actions and bundle native binaries for macOS Intel, macOS Apple Silicon, Linux x64, and Windows x64.
 - Color fullscreen service status, model configuration and request logs using the reference monitor's semantic palette.
 
@@ -18,6 +20,8 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Fixed
 
+- Translate generic custom-model thinking requests without GPT name guesses, send explicit disablement as `reasoning_effort: "none"`, and reject conflicting effort settings.
+- Validate immediate tool-result rounds and preserve text markers at image positions in tool results.
 - Return complete non-streaming Messages JSON for Qwen3 thinking requests by validating and collecting a streamed Chat Completions response; preserve explicit Qwen thinking disablement.
 - Split Chat Completions prompt usage into uncached, cache-read, and cache-write tokens consistently for JSON and SSE while preserving answers when usage statistics are incomplete or invalid.
 - Reject malformed request collections, orphaned tool results, undeclared response tools, audio, and annotations consistently; preserve streamed reasoning that follows tool calls.

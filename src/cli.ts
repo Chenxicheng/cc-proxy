@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { join } from 'node:path';
-import { AdapterConfig, AssistantPrefillMode } from './types/config';
+import { AdapterConfig, AssistantPrefillMode, MaxTokensField } from './types/config';
 import {
   getConfigDir,
   loadConfig,
@@ -276,7 +276,10 @@ async function promptForConfiguration(): Promise<AdapterConfig> {
   ]);
 
   const upstreamHeaders = parseUpstreamHeadersInput(upstreamHeadersAnswer.upstreamHeaders);
-  const capabilityAnswer = await inquirer.prompt<{ assistantPrefill: AssistantPrefillMode }>([
+  const capabilityAnswer = await inquirer.prompt<{
+    assistantPrefill: AssistantPrefillMode;
+    maxTokensField: MaxTokensField;
+  }>([
     {
       type: 'list',
       name: 'assistantPrefill',
@@ -295,6 +298,20 @@ async function promptForConfiguration(): Promise<AdapterConfig> {
       ],
       default: 'unsupported',
     },
+    {
+      type: 'list',
+      name: 'maxTokensField',
+      prefix,
+      message: 'Upstream token-limit field:',
+      choices: [
+        {
+          name: 'max_completion_tokens (Chat Completions default)',
+          value: 'max_completion_tokens',
+        },
+        { name: 'max_tokens (older compatible endpoints)', value: 'max_tokens' },
+      ],
+      default: 'max_completion_tokens',
+    },
   ]);
   const credentials =
     requiredAnswers.apiKeySource === 'environment'
@@ -312,6 +329,7 @@ async function promptForConfiguration(): Promise<AdapterConfig> {
     upstreamHeaders,
     upstreamCapabilities: {
       assistantPrefill: capabilityAnswer.assistantPrefill,
+      maxTokensField: capabilityAnswer.maxTokensField,
     },
   };
 }

@@ -1,4 +1,12 @@
 use super::*;
+
+#[test]
+fn streamed_message_id_is_unique_per_request() {
+    let first = StreamState::new("model".into(), "provider".into(), "req_a".into(), vec![]);
+    let second = StreamState::new("model".into(), "provider".into(), "req_b".into(), vec![]);
+    assert_eq!(first.message_id, "msg_req_a");
+    assert_eq!(second.message_id, "msg_req_b");
+}
 use std::{io, time::Duration};
 
 fn transform_bytes<S, E>(upstream: S, state: StreamState, storage: Storage) -> Body

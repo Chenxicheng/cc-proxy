@@ -162,11 +162,14 @@ describe('Config Utilities', () => {
                 baseUrl: 'https://api.test.com',
                 apiKey: 'key-123',
                 models: { opus: 'model-1', sonnet: 'model-2', haiku: 'model-3' },
-                upstreamCapabilities: { assistantPrefill: 'native' },
+                upstreamCapabilities: { assistantPrefill: 'native', maxTokensField: 'max_tokens' },
             });
 
             const content = JSON.parse(readFileSync(join(ADAPTER_DIR, 'config.json'), 'utf-8'));
-            expect(content.upstreamCapabilities).toEqual({ assistantPrefill: 'native' });
+            expect(content.upstreamCapabilities).toEqual({
+                assistantPrefill: 'native',
+                maxTokensField: 'max_tokens',
+            });
         });
 
         it('should create the cc-proxy directory when the legacy directory is absent', () => {

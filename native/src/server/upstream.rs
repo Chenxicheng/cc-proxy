@@ -6,10 +6,14 @@ use std::{
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use serde_json::{Value, json};
+use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::{config::AdapterConfig, error::AppError};
 
 pub(super) const STREAM_RESPONSE_HEADERS_TIMEOUT: Duration = Duration::from_secs(120);
+pub(super) const NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const NONSTREAM_RESPONSE_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
+pub(super) const NONSTREAM_RESPONSE_BODY_LIMIT: usize = 32 * 1024 * 1024;
 
 pub(super) async fn await_upstream_headers<F>(
     response: F,
@@ -29,14 +33,64 @@ where
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))
 }
 
-pub(super) async fn upstream_error(response: reqwest::Response, request: &Value) -> AppError {
+pub(super) async fn upstream_error(
+    response: reqwest::Response,
+    request: &Value,
+    deadline: Instant,
+) -> AppError {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let text = response
-        .text()
-        .await
-        .unwrap_or_else(|error| format!("Failed to read upstream error: {error}"));
+    let body = match read_upstream_body(response, deadline).await {
+        Ok(body) => body,
+        Err(error) => return error,
+    };
+    let text = String::from_utf8_lossy(&body).into_owned();
     build_upstream_error(status, text, upstream_request_shape(request))
+}
+
+pub(super) async fn read_upstream_body(
+    mut response: reqwest::Response,
+    deadline: Instant,
+) -> Result<Vec<u8>, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > NONSTREAM_RESPONSE_BODY_LIMIT as u64)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "Upstream response exceeds the 32 MiB limit",
+        ));
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = timeout_at(
+            deadline,
+            timeout(NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT, response.chunk()),
+        )
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "Upstream response exceeded the total deadline",
+            )
+        })?
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "Upstream response body stalled",
+            )
+        })?
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        let Some(chunk) = chunk else { break };
+        if chunk.len() > NONSTREAM_RESPONSE_BODY_LIMIT - body.len() {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "Upstream response exceeds the 32 MiB limit",
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn build_upstream_error(status: StatusCode, text: String, request_shape: Value) -> AppError {

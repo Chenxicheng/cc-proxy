@@ -3,6 +3,75 @@ use std::{collections::HashMap, future::pending};
 use super::*;
 
 #[tokio::test(start_paused = true)]
+async fn nonstream_body_idle_timeout_is_a_gateway_timeout() {
+    use axum::{Router, body::Body, response::Response, routing::get};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/",
+                get(|| async {
+                    Response::new(Body::from_stream(async_stream::stream! {
+                        yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"partial"));
+                        pending::<()>().await;
+                    }))
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::new();
+    let response = client.get(&url).send().await.unwrap();
+    let error = read_upstream_body(response, Instant::now() + Duration::from_secs(600))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(error.message, "Upstream response body stalled");
+    let response = client.get(&url).send().await.unwrap();
+    let error = read_upstream_body(response, Instant::now() + Duration::from_secs(2))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(
+        error.message,
+        "Upstream response exceeded the total deadline"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn nonstream_body_rejects_oversized_content_length() {
+    use axum::{Router, body::Body, response::Response, routing::get};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/",
+                get(|| async {
+                    Response::new(Body::from(vec![0u8; NONSTREAM_RESPONSE_BODY_LIMIT + 1]))
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let response = reqwest::Client::new().get(url).send().await.unwrap();
+    let error = read_upstream_body(response, Instant::now() + Duration::from_secs(10))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+    assert!(error.message.contains("32 MiB"));
+    server.abort();
+}
+
+#[tokio::test(start_paused = true)]
 async fn streaming_header_timeout_is_a_gateway_timeout() {
     let error = await_upstream_headers(
         pending::<reqwest::Result<reqwest::Response>>(),

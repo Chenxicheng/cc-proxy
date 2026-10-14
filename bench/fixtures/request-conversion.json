@@ -10,7 +10,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": false,
-      "max_tokens": 100
+      "max_completion_tokens": 100
     }
   },
   {
@@ -36,7 +36,7 @@
         { "role": "user", "content": "Finish" }
       ],
       "stream": false,
-      "max_tokens": 100
+      "max_completion_tokens": 100
     }
   },
   {
@@ -62,7 +62,7 @@
         { "role": "user", "content": "Next task" }
       ],
       "stream": false,
-      "max_tokens": 100
+      "max_completion_tokens": 100
     }
   },
   {
@@ -80,7 +80,7 @@
         { "role": "system", "content": "Keep this" },
         { "role": "user", "content": "Hello" }
       ],
-      "max_tokens": 64,
+      "max_completion_tokens": 64,
       "stream": true,
       "stream_options": { "include_usage": true }
     }
@@ -125,7 +125,7 @@
         { "role": "tool", "tool_call_id": "toolu_123", "content": "Sunny" }
       ],
       "stream": false,
-      "max_tokens": 100
+      "max_completion_tokens": 100
     }
   },
   {
@@ -141,7 +141,7 @@
       "messages": [{ "role": "user", "content": "Think" }],
       "stream": false,
       "max_completion_tokens": 100,
-      "reasoning_effort": "xhigh"
+      "reasoning_effort": "max"
     }
   },
   {
@@ -156,7 +156,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": false,
-      "max_tokens": 100
+      "max_completion_tokens": 100
     }
   },
   {
@@ -174,7 +174,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Continue" }],
       "stream": false,
-      "max_tokens": 10
+      "max_completion_tokens": 10
     }
   },
   {
@@ -189,7 +189,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": false,
-      "max_tokens": 10,
+      "max_completion_tokens": 10,
       "tool_choice": "none"
     }
   },
@@ -205,7 +205,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": false,
-      "max_tokens": 10,
+      "max_completion_tokens": 10,
       "tool_choice": "auto"
     }
   },
@@ -222,7 +222,7 @@
       "model": "gpt-4",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": false,
-      "max_tokens": 10,
+      "max_completion_tokens": 10,
       "tools": [
         {
           "type": "function",
@@ -260,7 +260,7 @@
         { "role": "assistant", "content": "{" }
       ],
       "stream": false,
-      "max_tokens": 10,
+      "max_completion_tokens": 10,
       "tools": [
         {
           "type": "function",
@@ -296,7 +296,7 @@
       "model": "glm-5.2",
       "messages": [{ "role": "user", "content": "Hello" }],
       "stream": true,
-      "max_tokens": 128,
+      "max_completion_tokens": 128,
       "stream_options": { "include_usage": true },
       "tools": [
         {
@@ -331,7 +331,7 @@
         { "role": "user", "content": "hello" }
       ],
       "stream": false,
-      "max_tokens": 10,
+      "max_completion_tokens": 10,
       "stop": [],
       "tool_choice": "none"
     }
@@ -382,7 +382,7 @@
         { "role": "user", "content": "continue" }
       ],
       "stream": false,
-      "max_tokens": 10
+      "max_completion_tokens": 10
     }
   },
   {
@@ -397,7 +397,7 @@
       ] }]
     },
     "expected": {
-      "model": "gpt-4o", "stream": false, "max_tokens": 100,
+      "model": "gpt-4o", "stream": false, "max_completion_tokens": 100,
       "messages": [{ "role": "user", "content": [
         { "type": "text", "text": "Compare" },
         { "type": "image_url", "image_url": { "url": "https://example.com/a.png" } },
@@ -418,7 +418,8 @@
         { "role": "user", "content": [
           { "type": "tool_result", "tool_use_id": "toolu_a", "content": [
             { "type": "text", "text": "A" },
-            { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } }
+            { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } },
+            { "type": "text", "text": "after image" }
           ] },
           { "type": "tool_result", "tool_use_id": "toolu_b", "content": [
             { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "T0s=" } }
@@ -428,14 +429,14 @@
       ]
     },
     "expected": {
-      "model": "gpt-4o", "stream": false, "max_tokens": 100,
+      "model": "gpt-4o", "stream": false, "max_completion_tokens": 100,
       "messages": [
         { "role": "assistant", "content": null, "tool_calls": [
           { "id": "toolu_a", "type": "function", "function": { "name": "first", "arguments": "{}" } },
           { "id": "toolu_b", "type": "function", "function": { "name": "second", "arguments": "{}" } }
         ] },
-        { "role": "tool", "tool_call_id": "toolu_a", "content": "A\n[Image output follows in the next user message.]" },
-        { "role": "tool", "tool_call_id": "toolu_b", "content": "[Image output follows in the next user message.]" },
+        { "role": "tool", "tool_call_id": "toolu_a", "content": "A\n[Image 1 follows in the next user message.]\nafter image" },
+        { "role": "tool", "tool_call_id": "toolu_b", "content": "[Image 1 follows in the next user message.]" },
         { "role": "user", "content": [
           { "type": "text", "text": "[Image from tool_call_id: toolu_a]" },
           { "type": "image_url", "image_url": { "url": "https://example.com/a.png" } },
@@ -454,10 +455,44 @@
       "messages": [{ "role": "user", "content": "Hello" }]
     },
     "expected": {
-      "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
+      "model": "qwen/qwen3.6-35b-a3b", "max_completion_tokens": 100,
       "stream": true, "stream_options": { "include_usage": true },
       "enable_thinking": true,
       "messages": [{ "role": "user", "content": "Hello" }]
+    }
+  },
+  {
+    "name": "custom model reasoning disabled",
+    "input": {
+      "model": "vendor/custom-model", "max_tokens": 80,
+      "thinking": { "type": "disabled" },
+      "messages": [{ "role": "user", "content": "Hello" }]
+    },
+    "expected": {
+      "model": "vendor/custom-model", "max_completion_tokens": 80,
+      "reasoning_effort": "none", "stream": false,
+      "messages": [{ "role": "user", "content": "Hello" }]
+    }
+  },
+  {
+    "name": "strict JSON schema without rewriting",
+    "input": {
+      "model": "vendor/custom-model", "max_tokens": 80,
+      "output_config": { "format": { "type": "json_schema", "schema": {
+        "type": "object", "properties": { "answer": { "type": "string" } },
+        "required": ["answer"], "additionalProperties": false
+      } } },
+      "messages": [{ "role": "user", "content": "Return JSON" }]
+    },
+    "expected": {
+      "model": "vendor/custom-model", "max_completion_tokens": 80,
+      "stream": false, "messages": [{ "role": "user", "content": "Return JSON" }],
+      "response_format": { "type": "json_schema", "json_schema": {
+        "name": "response", "strict": true, "schema": {
+          "type": "object", "properties": { "answer": { "type": "string" } },
+          "required": ["answer"], "additionalProperties": false
+        }
+      } }
     }
   }
 ]

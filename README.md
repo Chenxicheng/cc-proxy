@@ -4,7 +4,9 @@
 
 ## Conversion contract
 
-- `tools` and `stop_sequences` must use their documented array shapes. A named `tool_choice` must reference a declared tool, and each `tool_result` must match a preceding `tool_use` in the same request.
+- `tools` and `stop_sequences` must use their documented array shapes. A named `tool_choice` must reference a declared tool, and tool results must complete the immediately preceding assistant tool-use round.
+- The Chat token-limit field defaults to `max_completion_tokens`; configure `upstreamCapabilities.maxTokensField: "max_tokens"` for endpoints that require the older field. Explicit thinking disablement sends `reasoning_effort: "none"` on the generic path, so an unsupported upstream reports its own error.
+- Strict JSON schema output is forwarded only when its root shape can pass Chat strict mode without rewriting the schema. Non-streaming upstream responses have bounded time and size.
 - JSON and SSE responses reject undeclared tools, audio, non-empty annotations, malformed tool arguments, and unsupported finish reasons instead of silently dropping them.
 - Streamed reasoning is preserved even when it follows a tool call; later argument fragments remain attached to the original tool block.
 - Qwen3 thinking requests from non-streaming clients use a streaming upstream call and return one complete Messages JSON response after validation; Claude Code needs no special streaming setting.

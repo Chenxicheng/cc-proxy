@@ -20,7 +20,10 @@ use crate::{
 
 use super::{
     AppState,
-    upstream::{STREAM_RESPONSE_HEADERS_TIMEOUT, await_upstream_headers, upstream_error},
+    upstream::{
+        NONSTREAM_RESPONSE_TOTAL_TIMEOUT, STREAM_RESPONSE_HEADERS_TIMEOUT, await_upstream_headers,
+        read_upstream_body, upstream_error,
+    },
 };
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -101,8 +104,8 @@ async fn handle_messages(
     let streaming = anthropic.get("stream").and_then(Value::as_bool) == Some(true);
     let openai = convert_request_with_mode(
         anthropic,
-        &state.config.base_url,
         state.config.upstream_capabilities.assistant_prefill,
+        state.config.upstream_capabilities.max_tokens_field,
     )?;
     let upstream_streaming = openai["stream"] == true;
     let tool_names = openai
@@ -121,17 +124,11 @@ async fn handle_messages(
         .client
         .post(state.config.chat_completions_url())
         .json(&openai);
-    let response = if upstream_streaming {
-        await_upstream_headers(request.send(), STREAM_RESPONSE_HEADERS_TIMEOUT).await?
-    } else {
-        request
-            .send()
-            .await
-            .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?
-    };
+    let upstream_deadline = tokio::time::Instant::now() + NONSTREAM_RESPONSE_TOTAL_TIMEOUT;
+    let response = await_upstream_headers(request.send(), STREAM_RESPONSE_HEADERS_TIMEOUT).await?;
     let headers_received_at = tokio::time::Instant::now();
     if !response.status().is_success() {
-        return Err(upstream_error(response, &openai).await);
+        return Err(upstream_error(response, &openai, upstream_deadline).await);
     }
 
     if streaming {
@@ -171,10 +168,13 @@ async fn handle_messages(
         return Ok(Json(converted).into_response());
     }
 
-    let openai_response: Value = response
-        .json()
-        .await
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    let body = read_upstream_body(response, upstream_deadline).await?;
+    let openai_response: Value = serde_json::from_slice(&body).map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("Invalid upstream JSON: {error}"),
+        )
+    })?;
     let converted = convert_response(&openai_response, model, &tool_names)?;
     let usage = convert_usage(openai_response.get("usage"));
     let empty_end_turn = converted["stop_reason"] == "end_turn"

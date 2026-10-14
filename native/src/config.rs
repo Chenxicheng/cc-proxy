@@ -11,11 +11,30 @@ pub enum AssistantPrefillMode {
     Native,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaxTokensField {
+    #[default]
+    MaxCompletionTokens,
+    MaxTokens,
+}
+
+impl MaxTokensField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxCompletionTokens => "max_completion_tokens",
+            Self::MaxTokens => "max_tokens",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamCapabilities {
     #[serde(default)]
     pub assistant_prefill: AssistantPrefillMode,
+    #[serde(default)]
+    pub max_tokens_field: MaxTokensField,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -22,6 +22,30 @@ fn defaults_assistant_prefill_to_unsupported() {
         config.upstream_capabilities.assistant_prefill,
         AssistantPrefillMode::Unsupported
     );
+    assert_eq!(
+        config.upstream_capabilities.max_tokens_field,
+        MaxTokensField::MaxCompletionTokens
+    );
+}
+
+#[test]
+fn selects_max_tokens_field_explicitly() {
+    let config: AdapterConfig = serde_json::from_value(serde_json::json!({
+        "baseUrl": "https://provider.test/v1",
+        "apiKey": "secret",
+        "upstreamCapabilities": {"maxTokensField": "max_tokens"}
+    }))
+    .unwrap();
+    assert_eq!(
+        config.upstream_capabilities.max_tokens_field,
+        MaxTokensField::MaxTokens
+    );
+    let invalid = serde_json::from_value::<AdapterConfig>(serde_json::json!({
+        "baseUrl": "https://provider.test/v1",
+        "apiKey": "secret",
+        "upstreamCapabilities": {"maxTokensField": "auto"}
+    }));
+    assert!(invalid.is_err());
 }
 
 #[test]
