@@ -19,6 +19,7 @@ const existsSyncMock = jest.mocked(existsSync);
 const originalPlatform = process.platform;
 const originalArch = process.arch;
 const TEST_API_KEY_ENV = 'CC_PROXY_TEST_API_KEY';
+const packageVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version as string;
 
 interface FakeChild extends ChildProcess {
   stdout: PassThrough;
@@ -86,13 +87,13 @@ describe('native platform selection', () => {
     Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
     existsSyncMock.mockReturnValue(false);
     expect(() => resolveNativeBinary()).toThrow(
-      /Offline package is missing bin\/win32-x64-msvc\/cc-proxy-native\.exe.*Reinstall cc-proxy@1\.0\.0/
+      'Offline package is missing bin/win32-x64-msvc/cc-proxy-native.exe. ' +
+        'Reinstall cc-proxy@' + packageVersion
     );
   });
 
   it('publishes one offline package without platform dependencies', () => {
     const manifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
-    expect(manifest.version).toBe('1.0.0');
     expect(manifest.files).toEqual(['dist', 'bin', 'LICENSE']);
     expect(manifest.optionalDependencies).toBeUndefined();
     expect(manifest.bundleDependencies).toEqual(['chalk', 'commander', 'inquirer']);

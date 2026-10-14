@@ -26,6 +26,16 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 - Split Chat Completions prompt usage into uncached, cache-read, and cache-write tokens consistently for JSON and SSE while preserving answers when usage statistics are incomplete or invalid.
 - Reject malformed request collections, orphaned tool results, undeclared response tools, audio, and annotations consistently; preserve streamed reasoning that follows tool calls.
 
+## [1.1.0] — 2026-10-14
+
+### Added
+
+- Align Chat Completions conversion with the current Anthropic request contract, including strict JSON schema output, configurable token-limit fields, and bounded non-streaming responses.
+
+### Fixed
+
+- Return complete non-streaming Messages JSON for Qwen3 thinking requests and remove the protocol test's unreachable historical Git oracle.
+
 ## [2.2.0] — 2026-10-12
 
 ### Added
