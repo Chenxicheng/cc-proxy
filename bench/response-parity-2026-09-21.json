@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "baselineRefs": {
-    "node": "8a19608",
     "rust-before": "2419818",
     "rust": "uncommitted implementation based on 2419818"
   },

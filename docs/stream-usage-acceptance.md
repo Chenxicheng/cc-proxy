@@ -2,7 +2,7 @@
 
 ## Contract and layout
 
-`main@8a19608` is the normal-path oracle. `tests/protocol-parity.mjs` loads its converters from Git in memory and compares complete events after normalizing generated message IDs. It also consumes the same streams using Anthropic SDK 0.71.2 final snapshots; convenience callbacks are not the oracle for interleaved blocks. `bench/stream-validation.mjs` validates lifecycle, block identity, tool JSON, usage and termination for both acceptance and benchmarks. Fixtures remain under `bench/fixtures/`; sanitized real-upstream evidence remains under `tests/real-e2e/results/`.
+`tests/protocol-parity.mjs` validates complete fixture-based responses and consumes streams using Anthropic SDK 0.71.2 final snapshots; convenience callbacks are not the oracle for interleaved blocks. `bench/stream-validation.mjs` validates lifecycle, block identity, tool JSON, usage and termination for both acceptance and benchmarks. Fixtures remain under `bench/fixtures/`.
 
 Rules live in [API.md](API.md) and [rust-migration.md](rust-migration.md). Thinking is forwarded, not logged or signed. Non-streaming usage has numeric input/output totals. Stream starts use zero placeholders; final output defaults to zero and input is omitted without counters. Do not subtract cached or reasoning tokens from full upstream totals; retain raw usage and missing-final-chunk status in JSONL.
 

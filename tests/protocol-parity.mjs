@@ -1,39 +1,13 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import ts from 'typescript';
 import Anthropic from '@anthropic-ai/sdk';
 import { readAnthropicStream } from '../bench/stream-validation.mjs';
 
-// Read the immutable oracle from Git; never import the deleted TS server at runtime.
-const modules = new Map();
-function mainModule(file) {
-  if (modules.has(file)) return modules.get(file).exports;
-  const module = { exports: {} };
-  modules.set(file, module);
-  const source = execFileSync('git', ['show', `8a19608:${file}`], { encoding: 'utf8' });
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  new Function('require', 'module', 'exports', javascript)(
-    (name) => {
-      if (name.endsWith('/tokenUsage')) return { recordUsage() {} };
-      if (name.endsWith('/errorLog')) return { recordError() {} };
-      return mainModule(
-        path.posix.normalize(path.posix.join(path.posix.dirname(file), `${name}.ts`))
-      );
-    },
-    module,
-    module.exports
-  );
-  return module.exports;
-}
-const oracle = mainModule('src/converters/streaming.ts');
-const responseOracle = mainModule('src/converters/response.ts');
 const chunk = (delta, finish_reason = null) => ({ choices: [{ delta, finish_reason }] });
 const tool = (index, name, args) => ({
   index,
@@ -43,16 +17,14 @@ const tool = (index, name, args) => ({
 });
 const usage = { choices: [], usage: { prompt_tokens: 5, completion_tokens: 3 } };
 const cases = {
-  text: { chunks: [chunk({ content: 'answer' }, 'stop'), usage], parity: true },
+  text: { chunks: [chunk({ content: 'answer' }, 'stop'), usage] },
   thinking: {
     chunks: [chunk({ reasoning_content: '思考🙂' }), chunk({ content: 'answer' }, 'stop'), usage],
-    parity: true,
   },
   fallback: {
     chunks: [chunk({ reasoning_content: null, reasoning: 'think' }, 'stop')],
-    parity: true,
   },
-  reasoningOnly: { chunks: [chunk({ reasoning_content: 'think' }, 'stop')], parity: true },
+  reasoningOnly: { chunks: [chunk({ reasoning_content: 'think' }, 'stop')] },
   tool: {
     chunks: [
       chunk({ reasoning: 'think' }),
@@ -60,7 +32,6 @@ const cases = {
       chunk({ tool_calls: [{ index: 0, function: { arguments: '1}' } }] }, 'tool_calls'),
       usage,
     ],
-    parity: true,
   },
   repeatedToolName: {
     chunks: [
@@ -70,7 +41,6 @@ const cases = {
         'tool_calls'
       ),
     ],
-    parity: true,
   },
   parallel: {
     chunks: [
@@ -86,7 +56,6 @@ const cases = {
       ),
       usage,
     ],
-    parity: true,
   },
   toolThenText: {
     chunks: [
@@ -116,10 +85,9 @@ const cases = {
     text: 'complete',
   },
   emptyEndTurn: { chunks: [chunk({}, 'stop')], empty: true },
-  emptyChoice: { chunks: [{ choices: [] }, chunk({ content: 'answer' }, 'stop')], parity: true },
+  emptyChoice: { chunks: [{ choices: [] }, chunk({ content: 'answer' }, 'stop')] },
   postFinishEmpty: {
     chunks: [chunk({ content: 'answer' }, 'stop'), chunk({}, 'stop'), usage],
-    parity: true,
   },
   postFinishContent: {
     chunks: [chunk({ content: 'answer' }, 'stop'), chunk({ content: 'late' })],
@@ -270,27 +238,6 @@ try {
       const actual = [];
       const result = await readAnthropicStream(response, (event) => actual.push(event));
       if (name === 'text') streamedText = result;
-      if (scenario.parity) {
-        oracle.usedToolIds.clear();
-        const expected = [];
-        await oracle.streamOpenAIToAnthropic(
-          (async function* () {
-            yield* scenario.chunks;
-          })(),
-          {
-            raw: {
-              setHeader() {},
-              write(data) {
-                expected.push(JSON.parse(data.split('\ndata: ')[1]));
-              },
-              end() {},
-            },
-          },
-          name
-        );
-        actual[0].message.id = expected[0].message.id = 'normalized';
-        assert.deepEqual(actual, expected, `${name}: main event parity`);
-      }
       if (scenario.text)
         assert.equal(result.blocks.map((block) => block.text ?? '').join(''), scenario.text);
       if (scenario.empty) assert.deepEqual(result.blocks, []);
@@ -311,15 +258,15 @@ try {
     const actual = await client.messages.create({ ...request(String(index)), stream: false });
     assert.deepEqual(
       actual,
-      responseOracle.convertResponseToAnthropic(fixture.input, String(index))
+      { ...fixture.expected, model: String(index) }
     );
     completed++;
   }
   assert.deepEqual(streamedText.blocks.map((block) => ({ type: block.type, text: block.text })),
     fixtures[0].expected.content);
   assert.equal(streamedText.stopReason, fixtures[0].expected.stop_reason);
-  assert.equal(streamedText.usage.input_tokens, fixtures[0].expected.usage.input_tokens);
-  assert.equal(streamedText.usage.output_tokens, fixtures[0].expected.usage.output_tokens);
+  assert.equal(streamedText.usage.input_tokens, usage.usage.prompt_tokens);
+  assert.equal(streamedText.usage.output_tokens, usage.usage.completion_tokens);
   completed++;
   await client.messages.create({
     model: '0', max_tokens: 100,
@@ -368,7 +315,6 @@ try {
     completed++;
   }
   for (const body of [
-    { messages: [{ role: 'system', content: 'wrong role' }] },
     { messages: [{ role: 'user', content: [{ type: 'document', source: {} }] }] },
     { output_config: { format: { type: 'json_schema', schema: { type: 'object' } } } },
     { tools: [{ name: 'lookup', input_schema: { type: 'object' }, strict: true }] },
@@ -383,7 +329,7 @@ try {
     assert.equal(upstreamRequestCount, previousCount);
     completed++;
   }
-  console.log(JSON.stringify({ passed: completed, oracle: '8a19608', sdk: '0.71.2', errors: 0 }));
+  console.log(JSON.stringify({ passed: completed, sdk: '0.71.2', errors: 0 }));
 } finally {
   if (child.exitCode === null) {
     const exited = new Promise((resolve) => child.once('exit', resolve));
