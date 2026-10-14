@@ -7,6 +7,7 @@
 - `tools` and `stop_sequences` must use their documented array shapes. A named `tool_choice` must reference a declared tool, and each `tool_result` must match a preceding `tool_use` in the same request.
 - JSON and SSE responses reject undeclared tools, audio, non-empty annotations, malformed tool arguments, and unsupported finish reasons instead of silently dropping them.
 - Streamed reasoning is preserved even when it follows a tool call; later argument fragments remain attached to the original tool block.
+- Qwen3 thinking requests from non-streaming clients use a streaming upstream call and return one complete Messages JSON response after validation; Claude Code needs no special streaming setting.
 - Prompt usage is split into uncached input, cache reads, and cache writes when the upstream counters are complete. Missing or invalid usage never discards an otherwise valid answer; degraded values are explicitly classified in usage JSONL and are not suitable for exact billing.
 
 See [docs/API.md](docs/API.md) for the complete request, response, streaming, and degradation rules.

@@ -3,7 +3,6 @@ use std::{
     io,
 };
 
-use axum::http::StatusCode;
 use base64::{engine::general_purpose::STANDARD, read::DecoderReader};
 use rand::Rng;
 use serde_json::{Map, Value, json};
@@ -406,10 +405,17 @@ pub fn convert_request_with_mode(
     let mut output = Map::new();
     output.insert("model".into(), Value::String(model.to_owned()));
     output.insert("messages".into(), Value::Array(messages));
-    output.insert(
-        "stream".into(),
-        Value::Bool(request.get("stream").and_then(Value::as_bool) == Some(true)),
-    );
+    let client_streaming = request.get("stream").and_then(Value::as_bool) == Some(true);
+    let qwen_thinking = is_qwen3(model)
+        && matches!(
+            request
+                .get("thinking")
+                .and_then(|thinking| thinking.get("type"))
+                .and_then(Value::as_str),
+            Some("enabled" | "adaptive")
+        );
+    let upstream_streaming = client_streaming || qwen_thinking;
+    output.insert("stream".into(), Value::Bool(upstream_streaming));
     let mut max_tokens = request["max_tokens"]
         .as_u64()
         .expect("validated max_tokens");
@@ -422,7 +428,7 @@ pub fn convert_request_with_mode(
         "max_tokens"
     };
     output.insert(max_field.into(), Value::from(max_tokens));
-    if request.get("stream").and_then(Value::as_bool) == Some(true) {
+    if upstream_streaming {
         output.insert("stream_options".into(), json!({"include_usage": true}));
     }
     copy_fields(request, &mut output, &["temperature", "top_p"]);
@@ -838,14 +844,12 @@ fn apply_model_options(
         return Ok(());
     }
     if is_qwen3(model) {
-        if matches!(thinking_type, Some("enabled" | "adaptive")) {
-            if request.get("stream").and_then(Value::as_bool) != Some(true) {
-                return Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    "Qwen thinking mode in this adapter requires stream=true because the upstream provider only supports it reliably on streaming calls.",
-                ));
-            }
-            output.insert("enable_thinking".into(), Value::Bool(true));
+        if let Some(enabled) = match thinking_type {
+            Some("enabled" | "adaptive") => Some(true),
+            Some("disabled") => Some(false),
+            _ => None,
+        } {
+            output.insert("enable_thinking".into(), Value::Bool(enabled));
         }
         return Ok(());
     }

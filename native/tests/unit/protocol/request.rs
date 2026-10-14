@@ -1,4 +1,5 @@
 use super::*;
+use axum::http::StatusCode;
 
 fn convert_request(body: &Value, base_url: &str) -> Result<Value, AppError> {
     convert_request_with_mode(body, base_url, AssistantPrefillMode::Unsupported)
@@ -478,4 +479,35 @@ fn recognizes_plain_and_namespaced_qwen3_models() {
     });
     let converted = convert_request(&unrelated, "http://127.0.0.1:1234/v1").unwrap();
     assert!(converted.get("enable_thinking").is_none());
+}
+
+#[test]
+fn qwen_thinking_uses_upstream_stream_without_changing_other_requests() {
+    let mut body = json!({
+        "model": "qwen/qwen3.6-35b-a3b",
+        "max_tokens": 10,
+        "stream": false,
+        "thinking": {"type": "enabled"},
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let enabled = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
+    assert_eq!(enabled["stream"], true);
+    assert_eq!(enabled["stream_options"], json!({"include_usage": true}));
+    assert_eq!(enabled["enable_thinking"], true);
+
+    body["thinking"]["type"] = json!("disabled");
+    let disabled = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
+    assert_eq!(disabled["stream"], false);
+    assert!(disabled.get("stream_options").is_none());
+    assert_eq!(disabled["enable_thinking"], false);
+
+    body.as_object_mut().unwrap().remove("thinking");
+    let absent = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
+    assert_eq!(absent["stream"], false);
+    assert!(absent.get("enable_thinking").is_none());
+
+    body["model"] = json!("gpt-4o");
+    body["thinking"] = json!({"type": "enabled"});
+    let other = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
+    assert_eq!(other["stream"], false);
 }

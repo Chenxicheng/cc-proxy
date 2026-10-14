@@ -18,6 +18,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Fixed
 
+- Return complete non-streaming Messages JSON for Qwen3 thinking requests by validating and collecting a streamed Chat Completions response; preserve explicit Qwen thinking disablement.
 - Split Chat Completions prompt usage into uncached, cache-read, and cache-write tokens consistently for JSON and SSE while preserving answers when usage statistics are incomplete or invalid.
 - Reject malformed request collections, orphaned tool results, undeclared response tools, audio, and annotations consistently; preserve streamed reasoning that follows tool calls.
 

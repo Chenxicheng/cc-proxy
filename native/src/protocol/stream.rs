@@ -8,16 +8,17 @@ use std::{
 use async_stream::stream;
 use axum::{
     body::{Body, Bytes},
+    http::StatusCode,
     response::{IntoResponse, Sse, sse::Event},
 };
 use chrono::Utc;
-use eventsource_stream::Eventsource;
+use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::{Stream, StreamExt};
 use rand::Rng;
 use serde_json::{Value, json};
 use tokio::time::{Instant, timeout_at};
 
-use crate::storage::Storage;
+use crate::{error::AppError, storage::Storage};
 
 use super::{
     response::{map_finish_reason, reasoning_content},
@@ -57,6 +58,189 @@ pub fn transform_stream(
         headers_received_at,
         STREAM_TIMEOUTS,
     )
+}
+
+pub async fn collect_stream(
+    response: reqwest::Response,
+    model: String,
+    provider: String,
+    request_id: String,
+    headers_received_at: Instant,
+    tool_names: Vec<String>,
+) -> Result<(Value, Value), AppError> {
+    collect_bytes_with_timeouts(
+        response.bytes_stream(),
+        StreamState::new(model, provider, request_id, tool_names),
+        headers_received_at,
+        STREAM_TIMEOUTS,
+    )
+    .await
+}
+
+async fn collect_bytes_with_timeouts<S, E>(
+    upstream: S,
+    mut state: StreamState,
+    headers_received_at: Instant,
+    timeouts: StreamTimeouts,
+) -> Result<(Value, Value), AppError>
+where
+    S: Stream<Item = Result<Bytes, E>> + Send,
+    E: std::error::Error + Send + Sync,
+{
+    let upstream = timeout_bytes(upstream, headers_received_at, timeouts);
+    let events = upstream.eventsource();
+    futures_util::pin_mut!(events);
+    let mut message = BufferedMessage::default();
+    let mut done = false;
+    let mut waiting_for_first_event = true;
+    let first_event_deadline = headers_received_at + timeouts.first_anthropic_event;
+    loop {
+        let event = if waiting_for_first_event {
+            timeout_at(first_event_deadline, events.next())
+                .await
+                .map_err(|_| {
+                    AppError::new(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "Upstream stream timed out waiting for first Anthropic event",
+                    )
+                })?
+        } else {
+            events.next().await
+        };
+        let Some(event) = event else { break };
+        let event = event.map_err(|error| {
+            let status = match &error {
+                EventStreamError::Transport(error) if error.timed_out => {
+                    StatusCode::GATEWAY_TIMEOUT
+                }
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            AppError::new(status, format!("Upstream stream failed: {error}"))
+        })?;
+        if event.data == "[DONE]" {
+            done = true;
+            break;
+        }
+        let chunk: Value = serde_json::from_str(&event.data).map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("Invalid upstream SSE JSON: {error}"),
+            )
+        })?;
+        let output = state
+            .process_chunk(&chunk)
+            .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, message))?;
+        if !output.is_empty() {
+            waiting_for_first_event = false;
+        }
+        for event in output {
+            message.apply(&event)?;
+        }
+    }
+    for event in state
+        .finish(done)
+        .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, message))?
+    {
+        message.apply(&event)?;
+    }
+    let mut usage_record = state.usage_record();
+    usage_record["streaming"] = Value::Bool(false);
+    Ok((message.finish()?, usage_record))
+}
+
+#[derive(Default)]
+struct BufferedMessage {
+    value: Option<Value>,
+    stopped: bool,
+}
+
+impl BufferedMessage {
+    fn apply(&mut self, event: &Value) -> Result<(), AppError> {
+        let invalid = || AppError::new(StatusCode::BAD_GATEWAY, "Invalid converted stream event");
+        match event["type"].as_str() {
+            Some("message_start") => self.value = Some(event["message"].clone()),
+            Some("content_block_start") => {
+                let value = self.value.as_mut().ok_or_else(invalid)?;
+                let content = value["content"].as_array_mut().ok_or_else(invalid)?;
+                let index = event["index"].as_u64().ok_or_else(invalid)? as usize;
+                if index != content.len() {
+                    return Err(invalid());
+                }
+                let mut block = event["content_block"].clone();
+                if block["type"] == "tool_use" {
+                    block["input"] = Value::String(String::new());
+                }
+                content.push(block);
+            }
+            Some("content_block_delta") => {
+                let value = self.value.as_mut().ok_or_else(invalid)?;
+                let index = event["index"].as_u64().ok_or_else(invalid)? as usize;
+                let block = value["content"]
+                    .as_array_mut()
+                    .and_then(|content| content.get_mut(index))
+                    .ok_or_else(invalid)?;
+                let delta = &event["delta"];
+                let (field, fragment) = match delta["type"].as_str() {
+                    Some("text_delta") => ("text", delta["text"].as_str()),
+                    Some("thinking_delta") => ("thinking", delta["thinking"].as_str()),
+                    Some("input_json_delta") => ("input", delta["partial_json"].as_str()),
+                    _ => return Err(invalid()),
+                };
+                let fragment = fragment.ok_or_else(invalid)?;
+                let Value::String(current) = &mut block[field] else {
+                    return Err(invalid());
+                };
+                current.push_str(fragment);
+            }
+            Some("content_block_stop") => {
+                let value = self.value.as_mut().ok_or_else(invalid)?;
+                let index = event["index"].as_u64().ok_or_else(invalid)? as usize;
+                let block = value["content"]
+                    .as_array_mut()
+                    .and_then(|content| content.get_mut(index))
+                    .ok_or_else(invalid)?;
+                if block["type"] == "tool_use" {
+                    let input = block["input"].as_str().ok_or_else(invalid)?;
+                    block["input"] =
+                        serde_json::from_str(if input.is_empty() { "{}" } else { input }).map_err(
+                            |error| {
+                                AppError::new(
+                                    StatusCode::BAD_GATEWAY,
+                                    format!("Upstream tool arguments are invalid JSON: {error}"),
+                                )
+                            },
+                        )?;
+                }
+            }
+            Some("message_delta") => {
+                let value = self.value.as_mut().ok_or_else(invalid)?;
+                value["stop_reason"] = event["delta"]["stop_reason"].clone();
+                value["stop_sequence"] = event["delta"]["stop_sequence"].clone();
+                if let Some(details) = event["delta"].get("stop_details") {
+                    value["stop_details"] = details.clone();
+                }
+                value["usage"] = event["usage"].clone();
+            }
+            Some("message_stop") => self.stopped = true,
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Value, AppError> {
+        if !self.stopped {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "Upstream stream ended without a complete message",
+            ));
+        }
+        self.value.ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "Upstream stream ended without a message",
+            )
+        })
+    }
 }
 
 fn transform_bytes_with_timeouts<S, E>(
@@ -137,11 +321,14 @@ where
 }
 
 #[derive(Debug)]
-struct StreamReadError(String);
+struct StreamReadError {
+    message: String,
+    timed_out: bool,
+}
 
 impl fmt::Display for StreamReadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.message)
     }
 }
 
@@ -169,7 +356,7 @@ where
                     deadline = Instant::now() + timeouts.body_idle;
                 }
                 Ok(Some(Err(error))) => {
-                    yield Err(StreamReadError(error.to_string()));
+                    yield Err(StreamReadError { message: error.to_string(), timed_out: false });
                     break;
                 }
                 Ok(None) => break,
@@ -179,7 +366,7 @@ where
                     } else {
                         "Upstream stream was idle for too long"
                     };
-                    yield Err(StreamReadError(message.into()));
+                    yield Err(StreamReadError { message: message.into(), timed_out: true });
                     break;
                 }
             }

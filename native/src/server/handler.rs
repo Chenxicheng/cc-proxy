@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use crate::{
     error::AppError,
     protocol::{
-        convert_request_with_mode, convert_response, convert_usage, record_usage_metadata,
-        transform_stream, validate_request,
+        collect_stream, convert_request_with_mode, convert_response, convert_usage,
+        record_usage_metadata, transform_stream, validate_request,
     },
 };
 
@@ -104,6 +104,7 @@ async fn handle_messages(
         &state.config.base_url,
         state.config.upstream_capabilities.assistant_prefill,
     )?;
+    let upstream_streaming = openai["stream"] == true;
     let tool_names = openai
         .get("tools")
         .and_then(Value::as_array)
@@ -120,7 +121,7 @@ async fn handle_messages(
         .client
         .post(state.config.chat_completions_url())
         .json(&openai);
-    let response = if streaming {
+    let response = if upstream_streaming {
         await_upstream_headers(request.send(), STREAM_RESPONSE_HEADERS_TIMEOUT).await?
     } else {
         request
@@ -153,6 +154,21 @@ async fn handle_messages(
             .expect("valid streaming response");
         eprintln!("<- {model} [streaming] {request_id}");
         return Ok(response);
+    }
+
+    if upstream_streaming {
+        let (converted, usage_record) = collect_stream(
+            response,
+            model.to_owned(),
+            state.config.base_url.clone(),
+            request_id.to_owned(),
+            headers_received_at,
+            tool_names,
+        )
+        .await?;
+        state.storage.record_usage(usage_record);
+        eprintln!("<- {model} [received] {request_id}");
+        return Ok(Json(converted).into_response());
     }
 
     let openai_response: Value = response

@@ -68,6 +68,68 @@ where
     String::from_utf8(result.to_vec()).unwrap()
 }
 
+#[tokio::test]
+async fn collects_qwen_thinking_tools_and_usage_as_one_message() {
+    let upstream = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"id\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let chunks = futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(upstream))]);
+    let (message, usage) =
+        collect_bytes_with_timeouts(chunks, state(&["lookup"]), Instant::now(), STREAM_TIMEOUTS)
+            .await
+            .unwrap();
+    assert_eq!(
+        message["content"][0],
+        json!({"type":"thinking","thinking":"think"})
+    );
+    assert_eq!(
+        message["content"][1],
+        json!({"type":"text","text":"answer"})
+    );
+    assert_eq!(message["content"][2]["type"], "tool_use");
+    assert_eq!(message["content"][2]["input"], json!({"id":1}));
+    assert_eq!(message["stop_reason"], "tool_use");
+    assert_eq!(
+        message["usage"],
+        json!({"input_tokens":5,"output_tokens":3})
+    );
+    assert_eq!(usage["streaming"], false);
+    assert_eq!(usage["usage"]["completion_tokens"], 3);
+}
+
+#[tokio::test]
+async fn buffered_stream_rejects_error_and_truncation() {
+    for upstream in [
+        "data: {\"error\":{\"message\":\"provider failed\"}}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n",
+        "data: {broken\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"lookup\",\"arguments\":\"{\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    ] {
+        let chunks = futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(upstream))]);
+        let result = collect_bytes_with_timeouts(
+            chunks,
+            state(&["lookup"]),
+            Instant::now(),
+            STREAM_TIMEOUTS,
+        )
+        .await;
+        assert_eq!(result.unwrap_err().status, StatusCode::BAD_GATEWAY);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn buffered_stream_times_out_before_returning_json() {
+    let upstream = futures_util::stream::pending::<Result<Bytes, io::Error>>();
+    let result =
+        collect_bytes_with_timeouts(upstream, state(&[]), Instant::now(), timeouts(1, 2, 3)).await;
+    assert_eq!(result.unwrap_err().status, StatusCode::GATEWAY_TIMEOUT);
+}
+
 #[test]
 fn matches_shared_fixture_and_main_usage() {
     let fixture: Value = serde_json::from_str(include_str!(

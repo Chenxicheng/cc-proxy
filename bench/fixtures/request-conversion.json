@@ -445,5 +445,19 @@
         ] }
       ]
     }
+  },
+  {
+    "name": "qwen thinking buffers a streamed upstream for a non-streaming client",
+    "input": {
+      "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
+      "stream": false, "thinking": { "type": "enabled" },
+      "messages": [{ "role": "user", "content": "Hello" }]
+    },
+    "expected": {
+      "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
+      "stream": true, "stream_options": { "include_usage": true },
+      "enable_thinking": true,
+      "messages": [{ "role": "user", "content": "Hello" }]
+    }
   }
 ]
