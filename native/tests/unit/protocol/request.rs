@@ -132,7 +132,14 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
 
 #[test]
 fn preserves_reasoning_only_for_glm_and_qwen_tool_history() {
-    for model in ["glm-5.2", "qwen3-coder"] {
+    for model in [
+        "glm-5.2",
+        "GLM-4",
+        "vendor/GlM-4",
+        "qwen3-coder",
+        "QWEN2",
+        "vendor/QwEn2",
+    ] {
         let body = json!({
             "model": model, "max_tokens": 10,
             "messages": [
@@ -519,6 +526,50 @@ fn generic_thinking_maps_without_model_name_guessing() {
 }
 
 #[test]
+fn explicit_effort_is_not_silently_dropped_for_glm_or_qwen() {
+    let mut body = json!({
+        "model": "glm-5.2", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hello"}],
+        "output_config": {"effort": "xhigh"}
+    });
+    let glm = convert_request(&body, "unused").unwrap();
+    assert_eq!(glm["thinking"], json!({"type": "enabled"}));
+    assert_eq!(glm["reasoning_effort"], "max");
+
+    body["model"] = json!("provider/GLM-5.3-Flash");
+    for (effort, expected) in [
+        ("low", "low"),
+        ("medium", "high"),
+        ("high", "high"),
+        ("xhigh", "max"),
+        ("max", "max"),
+    ] {
+        body["output_config"]["effort"] = json!(effort);
+        let glm = convert_request(&body, "unused").unwrap();
+        assert_eq!(glm["thinking"], json!({"type": "enabled"}));
+        assert_eq!(glm["reasoning_effort"], expected);
+    }
+
+    body["model"] = json!("glm-5");
+    assert_eq!(
+        convert_request(&body, "unused").unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+    body["model"] = json!("qwen3.6-35b-a3b");
+    assert_eq!(
+        convert_request(&body, "unused").unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+
+    body["model"] = json!("vendor/QWEN3.8-27b");
+    body["output_config"]["effort"] = json!("xhigh");
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "xhigh"
+    );
+}
+
+#[test]
 fn strict_schema_precheck_rejects_lossy_conversion() {
     let mut body = json!({
         "model": "vendor/custom-42", "max_tokens": 100,
@@ -575,7 +626,12 @@ fn tool_results_must_complete_the_immediately_following_round() {
 
 #[test]
 fn recognizes_plain_and_namespaced_qwen3_models() {
-    for model in ["qwen3.6-35b-a3b", "qwen/qwen3.6-35b-a3b"] {
+    for model in [
+        "qwen3.6-35b-a3b",
+        "qwen/qwen3.6-35b-a3b",
+        "QWEN3.6-35b-a3b",
+        "vendor/QwEn3.6-35b-a3b",
+    ] {
         let body = json!({
             "model": model,
             "max_tokens": 10,

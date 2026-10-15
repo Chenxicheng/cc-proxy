@@ -453,7 +453,7 @@ pub fn convert_request_with_mode(
     }
 
     let mut ids = IdContext::default();
-    let preserve_reasoning = is_glm5(model) || is_qwen3(model);
+    let preserve_reasoning = is_glm(model) || is_qwen(model);
     for (message_index, message) in source_messages.iter().enumerate() {
         messages.extend(convert_message(
             message,
@@ -471,7 +471,7 @@ pub fn convert_request_with_mode(
     output.insert("model".into(), Value::String(model.to_owned()));
     output.insert("messages".into(), Value::Array(messages));
     let client_streaming = request.get("stream").and_then(Value::as_bool) == Some(true);
-    let qwen_thinking = is_qwen3(model)
+    let qwen_thinking = is_qwen(model)
         && matches!(
             request
                 .get("thinking")
@@ -975,12 +975,19 @@ fn apply_model_options(
         ));
     }
 
-    if is_glm5(model) {
+    if is_glm(model) {
+        if effort.is_some() && !is_glm52(model) && !is_glm53(model) {
+            return Err(AppError::bad_request(
+                "output_config.effort: this GLM model has no confirmed Chat effort mapping",
+            ));
+        }
         if let Some(kind) = thinking_type {
             output.insert(
                 "thinking".into(),
                 json!({"type": if kind == "disabled" { "disabled" } else { "enabled" }}),
             );
+        } else if effort.is_some() {
+            output.insert("thinking".into(), json!({"type": "enabled"}));
         }
         if request.get("stream").and_then(Value::as_bool) == Some(true)
             && request
@@ -991,14 +998,30 @@ fn apply_model_options(
             output.insert("tool_stream".into(), Value::Bool(true));
         }
         if is_glm52(model)
-            && thinking_type.is_some_and(|kind| kind != "disabled")
             && let Some(value) = glm_effort(effort, thinking_type)
+        {
+            output.insert("reasoning_effort".into(), Value::String(value.into()));
+        } else if is_glm53(model)
+            && let Some(value) = glm53_effort(effort)
         {
             output.insert("reasoning_effort".into(), Value::String(value.into()));
         }
         return Ok(());
     }
-    if is_qwen3(model) {
+    if is_qwen(model) {
+        if let Some(effort) = effort {
+            let name = normalized(model);
+            if !name
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.starts_with("qwen3.8"))
+            {
+                return Err(AppError::bad_request(
+                    "output_config.effort: this Qwen model has no confirmed Chat effort mapping",
+                ));
+            }
+            output.insert("reasoning_effort".into(), Value::String(effort.to_owned()));
+        }
         if let Some(enabled) = match thinking_type {
             Some("enabled" | "adaptive") => Some(true),
             Some("disabled") => Some(false),
@@ -1047,9 +1070,18 @@ fn openai_effort(
 
 fn glm_effort(effort: Option<&str>, thinking_type: Option<&str>) -> Option<&'static str> {
     match effort {
-        Some("max") => Some("max"),
+        Some("max" | "xhigh") => Some("max"),
         Some("high" | "medium" | "low") => Some("high"),
         _ if thinking_type == Some("adaptive") => Some("max"),
+        _ => None,
+    }
+}
+
+fn glm53_effort(effort: Option<&str>) -> Option<&'static str> {
+    match effort {
+        Some("low") => Some("low"),
+        Some("medium" | "high") => Some("high"),
+        Some("xhigh" | "max") => Some("max"),
         _ => None,
     }
 }
@@ -1057,17 +1089,24 @@ fn glm_effort(effort: Option<&str>, thinking_type: Option<&str>) -> Option<&'sta
 fn normalized(model: &str) -> String {
     model.trim().to_lowercase()
 }
-fn is_glm5(model: &str) -> bool {
-    normalized(model).starts_with("glm-5")
-}
-fn is_glm52(model: &str) -> bool {
-    normalized(model).starts_with("glm-5.2")
-}
-fn is_qwen3(model: &str) -> bool {
+fn model_name(model: &str) -> String {
     normalized(model)
         .rsplit('/')
         .next()
-        .is_some_and(|name| name.starts_with("qwen3"))
+        .unwrap_or_default()
+        .to_owned()
+}
+fn is_glm(model: &str) -> bool {
+    model_name(model).starts_with("glm")
+}
+fn is_glm52(model: &str) -> bool {
+    model_name(model).starts_with("glm-5.2")
+}
+fn is_glm53(model: &str) -> bool {
+    model_name(model).starts_with("glm-5.3")
+}
+fn is_qwen(model: &str) -> bool {
+    model_name(model).starts_with("qwen")
 }
 #[cfg(test)]
 #[path = "../../tests/unit/protocol/request.rs"]

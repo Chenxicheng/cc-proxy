@@ -494,5 +494,46 @@
         }
       } }
     }
+  },
+  {
+    "name": "GLM 5.2 explicit effort enables thinking",
+    "input": {
+      "model": "glm-5.2", "max_tokens": 100,
+      "output_config": { "effort": "xhigh" },
+      "messages": [{ "role": "user", "content": "Think" }]
+    },
+    "expected": {
+      "model": "glm-5.2", "max_completion_tokens": 100,
+      "stream": false, "thinking": { "type": "enabled" },
+      "reasoning_effort": "max",
+      "messages": [{ "role": "user", "content": "Think" }]
+    }
+  },
+  {
+    "name": "GLM 5.3 case-insensitive effort mapping",
+    "input": {
+      "model": "provider/GLM-5.3-Flash", "max_tokens": 100,
+      "output_config": { "effort": "low" },
+      "messages": [{ "role": "user", "content": "Think" }]
+    },
+    "expected": {
+      "model": "provider/GLM-5.3-Flash", "max_completion_tokens": 100,
+      "stream": false, "thinking": { "type": "enabled" },
+      "reasoning_effort": "low",
+      "messages": [{ "role": "user", "content": "Think" }]
+    }
+  },
+  {
+    "name": "Qwen 3.8 explicit effort",
+    "input": {
+      "model": "qwen3.8-27b", "max_tokens": 100,
+      "output_config": { "effort": "medium" },
+      "messages": [{ "role": "user", "content": "Think" }]
+    },
+    "expected": {
+      "model": "qwen3.8-27b", "max_completion_tokens": 100,
+      "stream": false, "reasoning_effort": "medium",
+      "messages": [{ "role": "user", "content": "Think" }]
+    }
   }
 ]
