@@ -220,6 +220,7 @@ fn plain_upstream_error_keeps_status_and_sanitized_request_shape() {
         StatusCode::NOT_ACCEPTABLE,
         "Not Acceptable".to_owned(),
         shape.clone(),
+        false,
     );
     assert_eq!(error.status, StatusCode::NOT_ACCEPTABLE);
     assert_eq!(error.message, "Not Acceptable");
@@ -251,4 +252,19 @@ fn plain_upstream_error_keeps_status_and_sanitized_request_shape() {
     }));
     assert_eq!(terminal_prefill["terminalAssistantPrefill"], true);
     assert!(!terminal_prefill.to_string().contains("secret"));
+}
+
+#[test]
+fn retry_after_accepts_seconds_and_http_date_only() {
+    for value in [
+        "15",
+        "Wed, 21 Oct 2015 07:28:00 GMT",
+        "Sunday, 06-Nov-94 08:49:37 GMT",
+        "Sun Nov  6 08:49:37 1994",
+    ] {
+        assert!(valid_retry_after(&HeaderValue::from_str(value).unwrap()));
+    }
+    for value in ["-1", "+1", "tomorrow", "Wed, 21 Oct 2015 07:28:00 PST"] {
+        assert!(!valid_retry_after(&HeaderValue::from_str(value).unwrap()));
+    }
 }

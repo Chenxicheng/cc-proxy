@@ -14,7 +14,7 @@ use crate::{
     error::AppError,
     protocol::{
         collect_stream, convert_request_with_mode, convert_response, convert_usage,
-        record_usage_metadata, transform_stream, validate_request,
+        record_usage_metadata, transform_stream,
     },
 };
 
@@ -73,9 +73,6 @@ pub(super) async fn messages(
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let streaming = anthropic.get("stream").and_then(Value::as_bool) == Some(true);
-    if let Err(error) = validate_request(&anthropic) {
-        return error_response(&state, &request_id, model, streaming, error);
-    }
     let response = handle_messages(&state, &request_id, &anthropic).await;
     let response = match response {
         Ok(response) => response,
@@ -90,7 +87,10 @@ fn with_request_id(mut response: Response, request_id: &str) -> Response {
     if let Ok(value) = HeaderValue::from_str(request_id) {
         response
             .headers_mut()
-            .insert(HeaderName::from_static("x-request-id"), value);
+            .insert(HeaderName::from_static("x-request-id"), value.clone());
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("request-id"), value);
     }
     response
 }
@@ -100,13 +100,13 @@ async fn handle_messages(
     request_id: &str,
     anthropic: &Value,
 ) -> Result<Response, AppError> {
-    let model = anthropic["model"].as_str().expect("validated model");
     let streaming = anthropic.get("stream").and_then(Value::as_bool) == Some(true);
     let openai = convert_request_with_mode(
         anthropic,
         state.config.upstream_capabilities.assistant_prefill,
         state.config.upstream_capabilities.max_tokens_field,
     )?;
+    let model = anthropic["model"].as_str().expect("validated model");
     let upstream_streaming = openai["stream"] == true;
     let tool_names = openai
         .get("tools")
@@ -237,6 +237,9 @@ fn error_record_value(
         if let Some(shape) = response.get("upstreamRequestShape") {
             request_shape = Some(shape.clone());
             details["response"] = response["response"].clone();
+            if let Some(truncated) = response.get("responseTruncated") {
+                details["responseTruncated"] = truncated.clone();
+            }
         } else {
             details["response"] = response.clone();
         }

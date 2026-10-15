@@ -14,6 +14,7 @@ pub(super) const STREAM_RESPONSE_HEADERS_TIMEOUT: Duration = Duration::from_secs
 pub(super) const NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const NONSTREAM_RESPONSE_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
 pub(super) const NONSTREAM_RESPONSE_BODY_LIMIT: usize = 32 * 1024 * 1024;
+const ERROR_RESPONSE_BODY_LIMIT: usize = 64 * 1024;
 
 pub(super) async fn await_upstream_headers<F>(
     response: F,
@@ -34,18 +35,71 @@ where
 }
 
 pub(super) async fn upstream_error(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     request: &Value,
     deadline: Instant,
 ) -> AppError {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let body = match read_upstream_body(response, deadline).await {
-        Ok(body) => body,
+    let retry_after = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .filter(|value| valid_retry_after(value))
+        .cloned();
+    let (body, truncated) = match read_upstream_error_body(&mut response, deadline).await {
+        Ok(result) => result,
         Err(error) => return error,
     };
     let text = String::from_utf8_lossy(&body).into_owned();
-    build_upstream_error(status, text, upstream_request_shape(request))
+    build_upstream_error(status, text, upstream_request_shape(request), truncated)
+        .with_retry_after(retry_after)
+}
+
+fn valid_retry_after(value: &HeaderValue) -> bool {
+    value.to_str().is_ok_and(|value| {
+        (!value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value.parse::<u64>().is_ok())
+            || (value.ends_with(" GMT") && chrono::DateTime::parse_from_rfc2822(value).is_ok())
+            || chrono::NaiveDateTime::parse_from_str(value, "%A, %d-%b-%y %H:%M:%S GMT").is_ok()
+            || chrono::NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y").is_ok()
+    })
+}
+
+async fn read_upstream_error_body(
+    response: &mut reqwest::Response,
+    deadline: Instant,
+) -> Result<(Vec<u8>, bool), AppError> {
+    let mut body = Vec::new();
+    loop {
+        let chunk = timeout_at(
+            deadline,
+            timeout(NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT, response.chunk()),
+        )
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "Upstream response exceeded the total deadline",
+            )
+        })?
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "Upstream response body stalled",
+            )
+        })?
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        let Some(chunk) = chunk else {
+            return Ok((body, false));
+        };
+        let remaining = ERROR_RESPONSE_BODY_LIMIT - body.len();
+        if chunk.len() > remaining {
+            body.extend_from_slice(&chunk[..remaining]);
+            return Ok((body, true));
+        }
+        body.extend_from_slice(&chunk);
+    }
 }
 
 pub(super) async fn read_upstream_body(
@@ -93,16 +147,30 @@ pub(super) async fn read_upstream_body(
     Ok(body)
 }
 
-fn build_upstream_error(status: StatusCode, text: String, request_shape: Value) -> AppError {
-    let details =
-        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::String(text.clone()));
+fn build_upstream_error(
+    status: StatusCode,
+    text: String,
+    request_shape: Value,
+    truncated: bool,
+) -> AppError {
+    let details = if truncated {
+        Value::String(text.clone())
+    } else {
+        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::String(text.clone()))
+    };
     let message = details
         .pointer("/error/message")
         .and_then(Value::as_str)
         .unwrap_or(&text)
         .to_owned();
+    let message = if truncated {
+        format!("Upstream returned HTTP {status}; error body truncated")
+    } else {
+        message
+    };
     AppError::new(status, message).with_details(json!({
         "response": details,
+        "responseTruncated": truncated,
         "upstreamRequestShape": request_shape,
     }))
 }

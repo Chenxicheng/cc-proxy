@@ -18,7 +18,11 @@ impl Drop for Proxy {
 
 async fn upstream(Json(request): Json<Value>) -> axum::response::Response {
     match request["model"].as_str().unwrap() {
-        "http-error" => (StatusCode::TOO_MANY_REQUESTS, "private-upstream-body").into_response(),
+        "http-error" => (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "12")], "private-upstream-body").into_response(),
+        "http-error-rfc850-retry" => (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "Sunday, 06-Nov-94 08:49:37 GMT")], "private-upstream-body").into_response(),
+        "http-error-asctime-retry" => (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "Sun Nov  6 08:49:37 1994")], "private-upstream-body").into_response(),
+        "http-error-invalid-retry" => (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "tomorrow")], "private-upstream-body").into_response(),
+        "http-error-large" => (StatusCode::TOO_MANY_REQUESTS, "x".repeat(128 * 1024)).into_response(),
         "invalid-response" => Json(json!({"choices": []})).into_response(),
         "stream-ok" => ([ ("content-type", "text/event-stream") ], concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
@@ -90,6 +94,10 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
         ("stream-ok", true, 200, false),
         ("http-error", false, 429, true),
         ("http-error", true, 429, true),
+        ("http-error-rfc850-retry", false, 429, true),
+        ("http-error-asctime-retry", false, 429, true),
+        ("http-error-invalid-retry", false, 429, true),
+        ("http-error-large", false, 429, true),
         ("invalid-response", false, 502, true),
         ("stream-error", true, 200, true),
         ("stream-invalid-json", true, 200, true),
@@ -109,7 +117,27 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
             .to_str()
             .unwrap()
             .to_owned();
+        assert_eq!(response.headers()["request-id"], id);
+        if model == "http-error" {
+            assert_eq!(response.headers()["retry-after"], "12");
+        } else if model == "http-error-rfc850-retry" {
+            assert_eq!(
+                response.headers()["retry-after"],
+                "Sunday, 06-Nov-94 08:49:37 GMT"
+            );
+        } else if model == "http-error-asctime-retry" {
+            assert_eq!(
+                response.headers()["retry-after"],
+                "Sun Nov  6 08:49:37 1994"
+            );
+        } else {
+            assert!(response.headers().get("retry-after").is_none());
+        }
         let body = response.text().await.unwrap();
+        if model == "http-error-large" {
+            assert!(body.contains("error body truncated"));
+            assert!(!body.contains(&"x".repeat(1024)));
+        }
         if expect_error {
             assert!(!body.contains("event: message_stop"), "{model}");
             failures.push(id);
@@ -124,10 +152,18 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
             json!({"model": "invalid-request", "messages": []}).to_string(),
             400,
         ),
+        (
+            json!({"messages": [{"role": "user", "content": "hello"}]}).to_string(),
+            400,
+        ),
         ("x".repeat(32 * 1024 * 1024 + 1), 413),
     ] {
         let response = client.post(&url).body(body).send().await.unwrap();
         assert_eq!(response.status().as_u16(), status);
+        assert_eq!(
+            response.headers()["request-id"],
+            response.headers()["x-request-id"]
+        );
         failures.push(
             response.headers()["x-request-id"]
                 .to_str()
@@ -172,6 +208,27 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
         })
         .collect();
     assert_eq!(errors.len(), failures.len());
+    for (model, phase) in [
+        ("stream-error", "upstream_sse_error"),
+        ("stream-invalid-json", "sse_json"),
+        ("stream-truncated", "stream_finish"),
+    ] {
+        let error = errors
+            .iter()
+            .find(|record| record["modelName"] == model)
+            .unwrap();
+        assert_eq!(error["error"]["phase"], phase);
+        assert!(error["error"]["elapsedMs"].is_number());
+    }
+    let large = errors
+        .iter()
+        .find(|record| record["modelName"] == "http-error-large")
+        .unwrap();
+    assert_eq!(large["error"]["responseTruncated"], true);
+    assert_eq!(
+        large["error"]["response"].as_str().unwrap().len(),
+        64 * 1024
+    );
     for id in failures {
         assert_eq!(
             logs.lines()

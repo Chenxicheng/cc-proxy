@@ -11,6 +11,7 @@
 - Streamed reasoning is preserved even when it follows a tool call; later argument fragments remain attached to the original tool block.
 - Qwen3 thinking requests from non-streaming clients use a streaming upstream call and return one complete Messages JSON response after validation; Claude Code needs no special streaming setting.
 - Explicit effort maps to `reasoning_effort` for Qwen3.8, to `high`/`max` for GLM-5.2, and to `low`/`high`/`max` for GLM-5.3; other GLM/Qwen models reject an unsupported explicit effort instead of ignoring it. Family matching is case-insensitive and uses the model-name prefix without assuming a generation number.
+- Responses include both `request-id` and `x-request-id`. Upstream error bodies are capped at 64 KiB, and valid `Retry-After` values are forwarded without automatic request retries.
 - Prompt usage is split into uncached input, cache reads, and cache writes when the upstream counters are complete. Missing or invalid usage never discards an otherwise valid answer; degraded values are explicitly classified in usage JSONL and are not suitable for exact billing.
 
 See [docs/API.md](docs/API.md) for the complete request, response, streaming, and degradation rules.

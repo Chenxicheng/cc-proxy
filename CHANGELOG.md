@@ -20,6 +20,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Fixed
 
+- Bound rejected upstream bodies to 64 KiB, forward all valid HTTP-date forms of `Retry-After`, and include Anthropic `request-id` alongside the existing correlation header.
 - Apply explicit GLM-5.2, GLM-5.3, and Qwen3.8 effort settings instead of silently dropping them; reject unsupported explicit effort for other GLM/Qwen models and match these families without case or generation assumptions.
 - Translate generic custom-model thinking requests without GPT name guesses, send explicit disablement as `reasoning_effort: "none"`, and reject conflicting effort settings.
 - Validate immediate tool-result rounds and preserve text markers at image positions in tool results.

@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde_json::json;
@@ -10,6 +10,7 @@ pub struct AppError {
     pub status: StatusCode,
     pub message: String,
     pub details: Option<serde_json::Value>,
+    pub retry_after: Option<HeaderValue>,
 }
 
 impl AppError {
@@ -18,6 +19,7 @@ impl AppError {
             status,
             message: message.into(),
             details: None,
+            retry_after: None,
         }
     }
 
@@ -27,6 +29,11 @@ impl AppError {
 
     pub fn with_details(mut self, details: serde_json::Value) -> Self {
         self.details = Some(details);
+        self
+    }
+
+    pub fn with_retry_after(mut self, value: Option<HeaderValue>) -> Self {
+        self.retry_after = value;
         self
     }
 
@@ -51,6 +58,10 @@ impl IntoResponse for AppError {
                 "message": self.message,
             }
         }));
-        (self.status, body).into_response()
+        let mut response = (self.status, body).into_response();
+        if let Some(value) = self.retry_after {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        response
     }
 }
