@@ -30,6 +30,7 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+tests/.live-e2e-*/
 
 # TypeScript cache
 *.tsbuildinfo

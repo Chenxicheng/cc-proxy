@@ -6,7 +6,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ---
 
-## [Unreleased]
+## [1.2.0] — 2026-10-15
 
 ### Added
 
@@ -23,6 +23,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 - Bound rejected upstream bodies to 64 KiB, forward all valid HTTP-date forms of `Retry-After`, and include Anthropic `request-id` alongside the existing correlation header.
 - Apply explicit GLM-5.2, GLM-5.3, and Qwen3.8 effort settings instead of silently dropping them; reject unsupported explicit effort for other GLM/Qwen models and match these families without case or generation assumptions.
+- Align benchmark preflights with the current `max_completion_tokens` and explicit effort conversion contract.
 - Translate generic custom-model thinking requests without GPT name guesses, send explicit disablement as `reasoning_effort: "none"`, and reject conflicting effort settings.
 - Validate immediate tool-result rounds and preserve text markers at image positions in tool results.
 - Return complete non-streaming Messages JSON for Qwen3 thinking requests by validating and collecting a streamed Chat Completions response; preserve explicit Qwen thinking disablement.

@@ -45,13 +45,9 @@ BENCH_TARGET=node BENCH_NODE_DIST=/absolute/path/to/main/dist node bench/benchma
 
 Recheck throughput decreases over 10% or p95 increases over max(10%, 1 ms), then diagnose repeatable regressions. Parser microbenchmarks and end-to-end latency must not be conflated. The memory check for long streams must distinguish retained active tool arguments (needed for validation) from unbounded accumulation of already-forwarded text.
 
-## Real upstream
-
-Run the manual harness described in [tests/real-e2e/README.md](../tests/real-e2e/README.md) with external credentials. Verify actual thinking, tool execution and final answer in Claude Code. If the provider sends no reasoning, record that limitation; a mock pass must not be labeled a real-provider thinking pass. Committed results contain only sanitized status/model/event/token summaries, never credentials, prompts or responses.
-
 ## Recorded acceptance: 2026-09-21
 
-On macOS arm64, 42 Rust tests, 91 Jest tests and 19 protocol/SDK cases passed. The real Qwen run received thinking as its first content delta; Claude Code emitted thinking events, executed Read and returned the expected final answer. See the [sanitized result](../tests/real-e2e/results/20260921T125117Z-qwen-qwen3.6-35b-a3b.json). This checks Claude Code's stream output, not a visual terminal screenshot. The earlier failed connection attempt is recorded separately.
+On macOS arm64, 42 Rust tests, 91 Jest tests and 19 protocol/SDK cases passed.
 
 The [performance artifact](../bench/response-parity-2026-09-21.json) contains all ten five-repetition matrices and binary hashes. All measured responses passed validation. All 16 text comparisons against pre-fix Rust passed the throughput/p95 gates. At zero upstream delay, streaming throughput changed by +1.6% to +4.4%; these small differences do not establish a significant speedup. Thinking/tool streaming throughput was 0.97–1.12 times main TS at zero delay and 0.96–1.01 times at 100 ms. These are local mock measurements, not model inference acceleration.
 

@@ -40,3 +40,14 @@ cargo fmt --manifest-path native/Cargo.toml --check
 cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
 cargo build --manifest-path native/Cargo.toml --release
 ```
+
+## Live REST acceptance
+
+Run this manually with a JSON Config outside the repository and its configured API key environment variable available in the current shell:
+
+```bash
+cargo build --manifest-path native/Cargo.toml --release
+node tests/live-e2e.mjs ~/.claude-adapter/
+```
+
+The test starts the Rust REST service directly, selects `models.sonnet` by default (or accepts a model name as the second argument), and checks non-streaming text, streaming text, and a tool-result/final-answer round trip against the configured real model. It prints only pass/fail summaries. Temporary logs are removed after the run; the external Config is not changed.
