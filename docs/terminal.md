@@ -1,5 +1,7 @@
 # 启动后的终端界面
 
+启动横幅在 iTerm2 和 WezTerm 的直接终端会话中以内嵌 PNG 显示；其他终端或 tmux/screen 会话显示 `cc-proxy` 文字标题。
+
 配置并启动成功后，交互终端自动进入 fullscreen。顶部固定显示版本、监听地址和 Opus / Sonnet / Haiku 模型配置，下方显示 Rust 服务的 send / response 日志。
 
 - `-> … [sent]`：开始发送上游请求。

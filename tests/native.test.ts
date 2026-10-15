@@ -94,7 +94,7 @@ describe('native platform selection', () => {
 
   it('publishes one offline package without platform dependencies', () => {
     const manifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
-    expect(manifest.files).toEqual(['dist', 'bin', 'LICENSE']);
+    expect(manifest.files).toEqual(['dist', 'bin', 'assets/banner.png', 'LICENSE']);
     expect(manifest.optionalDependencies).toBeUndefined();
     expect(manifest.bundleDependencies).toEqual(['chalk', 'commander', 'inquirer']);
   });

@@ -134,11 +134,44 @@ describe('UI Utility Class', () => {
             expect(mockConsoleLog).toHaveBeenCalledTimes(4);
         });
 
-        it('should display banner', () => {
-            UI.banner();
-            expect(mockConsoleLog).toHaveBeenCalled();
-            // Banner has multiple art lines
-            expect(mockConsoleLog.mock.calls.length).toBeGreaterThanOrEqual(5);
+        it('should render the PNG banner through the iTerm2 image protocol', () => {
+            const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+            const originalTermProgram = process.env.TERM_PROGRAM;
+            const originalTerm = process.env.TERM;
+            Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+            process.env.TERM_PROGRAM = 'iTerm.app';
+            process.env.TERM = 'xterm-256color';
+
+            try {
+                UI.banner();
+                const output = mockConsoleLog.mock.calls[0][0] as string;
+                expect(output).toContain('\x1b]1337;File=inline=1;width=80;height=18;preserveAspectRatio=1:');
+                const terminator = output.lastIndexOf('\x07');
+                const encodedImage = output.slice(output.lastIndexOf(':', terminator) + 1, terminator);
+                expect(Buffer.from(encodedImage ?? '', 'base64').subarray(0, 8)).toEqual(
+                    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+                );
+            } finally {
+                if (ttyDescriptor) Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor);
+                else delete (process.stdout as unknown as { isTTY?: boolean }).isTTY;
+                if (originalTermProgram === undefined) delete process.env.TERM_PROGRAM;
+                else process.env.TERM_PROGRAM = originalTermProgram;
+                if (originalTerm === undefined) delete process.env.TERM;
+                else process.env.TERM = originalTerm;
+            }
+        });
+
+        it('should show a text banner in terminals without inline image support', () => {
+            const originalTermProgram = process.env.TERM_PROGRAM;
+            process.env.TERM_PROGRAM = 'unsupported';
+
+            try {
+                UI.banner();
+                expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('cc-proxy'));
+            } finally {
+                if (originalTermProgram === undefined) delete process.env.TERM_PROGRAM;
+                else process.env.TERM_PROGRAM = originalTermProgram;
+            }
         });
 
         it('should display update notification', () => {

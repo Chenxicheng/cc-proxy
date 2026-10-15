@@ -23,6 +23,7 @@
   "files": [
     "dist",
     "bin",
+    "assets/banner.png",
     "LICENSE"
   ],
   "keywords": [

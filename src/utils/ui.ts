@@ -1,4 +1,6 @@
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Claude Code Inspired Palette
 const Palette = {
@@ -81,21 +83,20 @@ export class UI {
   }
 
   static banner() {
-    const brand = chalk.hex(Palette.Brand);
-    const dim = chalk.hex(Palette.Dim);
+    if (
+      process.stdout.isTTY &&
+      process.env.TERM !== 'dumb' &&
+      !process.env.TMUX &&
+      !process.env.STY &&
+      ['iTerm.app', 'WezTerm'].includes(process.env.TERM_PROGRAM ?? '')
+    ) {
+      // shortcut: skip multiplexers, enable chunked image passthrough before removing this guard.
+      const image = readFileSync(join(__dirname, '../../assets/banner.png')).toString('base64');
+      this.log(`\x1b]1337;File=inline=1;width=80;height=18;preserveAspectRatio=1:${image}\x07`);
+      return;
+    }
 
-    // USB adapter with CLAUDE text inside
-    const art = [
-      '',
-      dim('     ┌────────────────────┐'),
-      dim('     │ ') + brand('┌─┐┬  ┌─┐┬ ┬┌┬┐┌─┐') + dim(' ├──┐'),
-      dim('     │ ') + brand('│  │  ├─┤│ │ ││├┤ ') + dim(' │▓▓│'),
-      dim('     │ ') + brand('└─┘┴─┘┴ ┴└─┘─┴┘└─┘') + dim(' ├──┘'),
-      dim('     └──────•ADAPTER──────┘'),
-      '',
-    ];
-
-    art.forEach((line) => this.log(line));
+    this.log(chalk.hex(Palette.Brand).bold('cc-proxy'));
   }
 
   static table(rows: { label: string; value: string }[]) {
