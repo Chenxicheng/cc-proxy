@@ -268,7 +268,7 @@ where
                     Ok(event) => event,
                     Err(_) => {
                         let message = "Upstream stream timed out waiting for first Anthropic event";
-                        storage.record_error(state.error_record(message));
+                        storage.record_error(state.error_record(message, "first_anthropic_event", headers_received_at.elapsed()));
                         yield Ok::<Event, Infallible>(encode_event(error_event(message)));
                         failed = true;
                         break;
@@ -283,10 +283,20 @@ where
                     done = true;
                     break;
                 }
-                Ok(event) => serde_json::from_str::<Value>(&event.data)
-                    .map_err(|error| format!("Invalid upstream SSE JSON: {error}"))
-                    .and_then(|chunk| state.process_chunk(&chunk)),
-                Err(error) => Err(format!("Upstream stream failed: {error}")),
+                Ok(event) => match serde_json::from_str::<Value>(&event.data) {
+                    Ok(chunk) => state.process_chunk(&chunk).map_err(|message| {
+                        let phase = if chunk.get("error").is_some() { "upstream_sse_error" } else { "protocol_conversion" };
+                        (phase, message)
+                    }),
+                    Err(error) => Err(("sse_json", format!("Invalid upstream SSE JSON: {error}"))),
+                },
+                Err(error) => {
+                    let phase = match &error {
+                        EventStreamError::Transport(error) => error.phase,
+                        _ => "sse_frame",
+                    };
+                    Err((phase, format!("Upstream stream failed: {error}")))
+                },
             };
             match result {
                 Ok(events) => {
@@ -295,8 +305,8 @@ where
                     }
                     for event in events { yield Ok::<Event, Infallible>(encode_event(event)); }
                 }
-                Err(message) => {
-                    storage.record_error(state.error_record(&message));
+                Err((phase, message)) => {
+                    storage.record_error(state.error_record(&message, phase, headers_received_at.elapsed()));
                     yield Ok(encode_event(error_event(&message)));
                     failed = true;
                     break;
@@ -311,7 +321,7 @@ where
                     for event in events { yield Ok(encode_event(event)); }
                 }
                 Err(message) => {
-                    storage.record_error(state.error_record(&message));
+                    storage.record_error(state.error_record(&message, "stream_finish", headers_received_at.elapsed()));
                     yield Ok(encode_event(error_event(&message)));
                 }
             }
@@ -324,6 +334,7 @@ where
 struct StreamReadError {
     message: String,
     timed_out: bool,
+    phase: &'static str,
 }
 
 impl fmt::Display for StreamReadError {
@@ -356,7 +367,7 @@ where
                     deadline = Instant::now() + timeouts.body_idle;
                 }
                 Ok(Some(Err(error))) => {
-                    yield Err(StreamReadError { message: error.to_string(), timed_out: false });
+                    yield Err(StreamReadError { message: error.to_string(), timed_out: false, phase: "upstream_transport" });
                     break;
                 }
                 Ok(None) => break,
@@ -366,7 +377,8 @@ where
                     } else {
                         "Upstream stream was idle for too long"
                     };
-                    yield Err(StreamReadError { message: message.into(), timed_out: true });
+                    let phase = if first { "first_body_bytes" } else { "body_idle" };
+                    yield Err(StreamReadError { message: message.into(), timed_out: true, phase });
                     break;
                 }
             }
@@ -822,8 +834,8 @@ impl StreamState {
         record
     }
 
-    fn error_record(&self, message: &str) -> Value {
-        let mut error = json!({"message": message, "type": "stream_error"});
+    fn error_record(&self, message: &str, phase: &str, elapsed: Duration) -> Value {
+        let mut error = json!({"message": message, "type": "stream_error", "phase": phase, "elapsedMs": elapsed.as_millis()});
         if let Some(details) = &self.error_details {
             error["response"] = json!({"error": details});
         }

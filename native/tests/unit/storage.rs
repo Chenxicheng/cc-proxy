@@ -23,6 +23,23 @@ fn terminal_error_summary_excludes_private_details_and_escapes_controls() {
     assert!(!summary.contains('\u{1b}'));
 }
 
+#[test]
+fn terminal_stream_error_summary_shows_safe_phase_and_elapsed_time() {
+    let summary = error_summary(&json!({
+        "modelName": "qwen3.8-27b",
+        "requestId": "req_1",
+        "error": {
+            "type": "stream_error",
+            "phase": "first_body_bytes",
+            "elapsedMs": 120_000,
+            "message": "private upstream body"
+        }
+    }));
+    assert!(summary.contains("phase=\"first_body_bytes\""));
+    assert!(summary.contains("elapsed_ms=120000"));
+    assert!(!summary.contains("private upstream body"));
+}
+
 #[tokio::test]
 async fn flushes_queued_records_on_shutdown() {
     let directory = tempdir().unwrap();

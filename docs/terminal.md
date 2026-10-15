@@ -8,7 +8,7 @@
 - `<- … [streaming]`：已收到上游响应头，开始向客户端提供流式响应；不代表响应已经完成。
 - `<- … [received]`：非流式响应已读取并转换完成。
 - `<- … [completed]`：上游流已结束且通过完整性校验，代理准备发送最终结束事件；不表示客户端已确认收到。
-- `<- … [error]`：请求校验、上游 HTTP、响应转换或流式处理失败。显示 request ID、HTTP 状态码（流内错误为 `n/a`）与错误类型；详情按同一 request ID 查询 `error_logs/*.jsonl`。
+- `<- … [error]`：请求校验、上游 HTTP、响应转换或流式处理失败。显示 request ID、HTTP 状态码（流内错误为 `n/a`）与错误类型；流内错误还显示失败阶段 `phase` 和从收到上游响应头起的 `elapsed_ms`。详情按同一 request ID 查询 `error_logs/*.jsonl`。
 
 所有 `/v1/messages` handler 返回的错误都写入错误日志，包括非法 JSON、请求体过大和参数校验失败。流内错误只记错误，不记 `[completed]`；客户端提前断开不会被标为完成。终端不输出上游错误正文。流式完成的 usage 记录带 `requestId`，可与终端记录关联。
 

@@ -85,8 +85,14 @@ fn error_summary(record: &Value) -> String {
     let status = record["error"]["status"]
         .as_u64()
         .map_or_else(|| "n/a".to_owned(), |status| status.to_string());
+    let phase = record["error"]["phase"]
+        .as_str()
+        .map_or_else(String::new, |phase| format!(" phase={phase:?}"));
+    let elapsed = record["error"]["elapsedMs"]
+        .as_u64()
+        .map_or_else(String::new, |elapsed| format!(" elapsed_ms={elapsed}"));
     format!(
-        "<- {model:?} [error] {request_id:?} status={status} type={error_type:?} (see error_logs)"
+        "<- {model:?} [error] {request_id:?} status={status} type={error_type:?}{phase}{elapsed} (see error_logs)"
     )
 }
 

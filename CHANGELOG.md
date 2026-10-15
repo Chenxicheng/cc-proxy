@@ -10,6 +10,7 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ### Added
 
+- Include failure phase and elapsed time in streaming error logs and safe terminal summaries.
 - Select the Chat token-limit field through upstream configuration and forward compatible strict JSON schema output without schema rewriting.
 - Bound non-streaming upstream response time and size, and derive streaming message IDs from proxy request IDs.
 - Build release packages only in GitHub Actions and bundle native binaries for macOS Intel, macOS Apple Silicon, Linux x64, and Windows x64.

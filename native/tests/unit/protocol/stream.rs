@@ -566,7 +566,8 @@ fn preserves_errors_and_refusal() {
         .process_chunk(&json!({"error":{"message":"Not Acceptable","code":"unsupported_field"}}))
         .unwrap_err();
     assert_eq!(
-        state.error_record(&error)["error"]["response"]["error"]["code"],
+        state.error_record(&error, "upstream_sse_error", Duration::ZERO)["error"]["response"]["error"]
+            ["code"],
         "unsupported_field"
     );
     let events = state
@@ -656,6 +657,38 @@ async fn times_out_when_first_body_bytes_never_arrive() {
     );
     assert_eq!(text.matches("event: error").count(), 1, "{text}");
     assert!(!text.contains("event: message_stop"), "{text}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_body_timeout_records_diagnostic_phase_once() {
+    let upstream = futures_util::stream::pending::<Result<Bytes, io::Error>>();
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, writer) = Storage::start(dir.path().into());
+    let body = transform_bytes_with_timeouts(
+        upstream,
+        state(&[]),
+        storage,
+        Instant::now(),
+        timeouts(1, 2, 3),
+    );
+    let response = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&response).contains("event: error"));
+    writer.await.unwrap();
+    let logs = tokio::fs::read_to_string(
+        dir.path()
+            .join("error_logs")
+            .join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d"))),
+    )
+    .await
+    .unwrap();
+    let records = logs
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["error"]["phase"], "first_body_bytes");
+    assert!(records[0]["error"]["elapsedMs"].as_u64().unwrap() >= 1_000);
+    assert_eq!(records[0]["streaming"], true);
 }
 
 #[tokio::test(start_paused = true)]
