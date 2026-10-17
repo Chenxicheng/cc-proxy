@@ -964,7 +964,7 @@ fn apply_model_options(
         .and_then(|config| config.get("effort"))
         .and_then(Value::as_str);
 
-    if thinking_type == Some("disabled") && effort.is_some() {
+    if thinking_type == Some("disabled") && effort.is_some() && !is_qwen(model) {
         return Err(AppError::bad_request(
             "output_config.effort: conflicts with thinking.disabled",
         ));
@@ -1009,19 +1009,6 @@ fn apply_model_options(
         return Ok(());
     }
     if is_qwen(model) {
-        if let Some(effort) = effort {
-            let name = normalized(model);
-            if !name
-                .rsplit('/')
-                .next()
-                .is_some_and(|name| name.starts_with("qwen3.8"))
-            {
-                return Err(AppError::bad_request(
-                    "output_config.effort: this Qwen model has no confirmed Chat effort mapping",
-                ));
-            }
-            output.insert("reasoning_effort".into(), Value::String(effort.to_owned()));
-        }
         if let Some(enabled) = match thinking_type {
             Some("enabled" | "adaptive") => Some(true),
             Some("disabled") => Some(false),

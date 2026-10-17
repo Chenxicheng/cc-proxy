@@ -2,7 +2,7 @@
 
 ## 工作目录边界
 
-`/Users/jingdi/IdeaProjects/cc-proxy` 是本项目的主工作目录，所有项目修改和产出都在此目录完成。`/Users/jingdi/workspace/claude-code-proxy` 是只读参考项目；可读取其文件以了解背景或对照实现，不得在其中创建、修改或删除文件。
+`/Users/jingdi/dev_workspace/cc-proxy` 是本项目的主工作目录，所有项目修改和产出都在此目录完成。`/Users/jingdi/workspace/claude-code-proxy` 是只读参考项目；可读取其文件以了解背景或对照实现，不得在其中创建、修改或删除文件。
 
 ## 项目结构与模块组织
 

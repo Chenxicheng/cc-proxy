@@ -524,7 +524,7 @@
     }
   },
   {
-    "name": "Qwen 3.8 explicit effort",
+    "name": "Qwen 3.8 ignores explicit effort",
     "input": {
       "model": "qwen3.8-27b", "max_tokens": 100,
       "output_config": { "effort": "medium" },
@@ -532,7 +532,7 @@
     },
     "expected": {
       "model": "qwen3.8-27b", "max_completion_tokens": 100,
-      "stream": false, "reasoning_effort": "medium",
+      "stream": false,
       "messages": [{ "role": "user", "content": "Think" }]
     }
   }

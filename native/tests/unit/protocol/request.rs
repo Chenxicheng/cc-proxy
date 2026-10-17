@@ -526,7 +526,7 @@ fn generic_thinking_maps_without_model_name_guessing() {
 }
 
 #[test]
-fn explicit_effort_is_not_silently_dropped_for_glm_or_qwen() {
+fn glm_maps_effort_and_qwen_ignores_it() {
     let mut body = json!({
         "model": "glm-5.2", "max_tokens": 100,
         "messages": [{"role": "user", "content": "hello"}],
@@ -556,17 +556,25 @@ fn explicit_effort_is_not_silently_dropped_for_glm_or_qwen() {
         StatusCode::BAD_REQUEST
     );
     body["model"] = json!("qwen3.6-35b-a3b");
-    assert_eq!(
-        convert_request(&body, "unused").unwrap_err().status,
-        StatusCode::BAD_REQUEST
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap()
+            .get("reasoning_effort")
+            .is_none()
     );
 
     body["model"] = json!("vendor/QWEN3.8-27b");
-    body["output_config"]["effort"] = json!("xhigh");
-    assert_eq!(
-        convert_request(&body, "unused").unwrap()["reasoning_effort"],
-        "xhigh"
+    body["output_config"]["effort"] = json!("max");
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap()
+            .get("reasoning_effort")
+            .is_none()
     );
+    body["thinking"] = json!({"type": "disabled"});
+    let qwen = convert_request(&body, "unused").unwrap();
+    assert_eq!(qwen["enable_thinking"], false);
+    assert!(qwen.get("reasoning_effort").is_none());
 }
 
 #[test]
