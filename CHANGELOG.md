@@ -8,6 +8,8 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-18
+
 ### Fixed
 
 - Omit `reasoning_effort` for Qwen requests and ignore explicit effort while retaining `thinking.type` control.
