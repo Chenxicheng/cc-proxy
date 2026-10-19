@@ -8,6 +8,12 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-10-19
+
+### Added
+
+- Record sanitized upstream response metadata and the underlying error chain for streaming transport failures.
+
 ## [1.3.0] — 2026-10-18
 
 ### Fixed
