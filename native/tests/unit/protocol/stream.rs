@@ -7,6 +7,31 @@ fn streamed_message_id_is_unique_per_request() {
     assert_eq!(first.message_id, "msg_req_a");
     assert_eq!(second.message_id, "msg_req_b");
 }
+
+#[test]
+fn stream_error_record_contains_safe_upstream_metadata() {
+    let record = state(&[])
+        .with_response_metadata(json!({
+            "status": 200,
+            "contentType": "text/event-stream",
+            "contentEncoding": null,
+            "contentLength": null,
+            "transferEncoding": "chunked"
+        }))
+        .error_record(
+            "body failed",
+            "upstream_transport",
+            Duration::from_millis(7),
+        );
+
+    assert_eq!(record["error"]["phase"], "upstream_transport");
+    assert_eq!(record["error"]["upstreamResponse"]["status"], 200);
+    assert_eq!(
+        record["error"]["upstreamResponse"]["contentType"],
+        "text/event-stream"
+    );
+    assert!(!record.to_string().contains("Authorization"));
+}
 use std::{io, time::Duration};
 
 fn transform_bytes<S, E>(upstream: S, state: StreamState, storage: Storage) -> Body

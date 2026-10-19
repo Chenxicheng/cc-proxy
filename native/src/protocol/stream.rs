@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
+    error::Error,
     fmt,
     time::Duration,
 };
@@ -51,9 +52,11 @@ pub fn transform_stream(
     headers_received_at: Instant,
     tool_names: Vec<String>,
 ) -> Body {
+    let response_metadata = response_metadata(&response);
     transform_bytes_with_timeouts(
         response.bytes_stream(),
-        StreamState::new(model, provider, request_id, tool_names),
+        StreamState::new(model, provider, request_id, tool_names)
+            .with_response_metadata(response_metadata),
         storage,
         headers_received_at,
         STREAM_TIMEOUTS,
@@ -68,9 +71,11 @@ pub async fn collect_stream(
     headers_received_at: Instant,
     tool_names: Vec<String>,
 ) -> Result<(Value, Value), AppError> {
+    let response_metadata = response_metadata(&response);
     collect_bytes_with_timeouts(
         response.bytes_stream(),
-        StreamState::new(model, provider, request_id, tool_names),
+        StreamState::new(model, provider, request_id, tool_names)
+            .with_response_metadata(response_metadata),
         headers_received_at,
         STREAM_TIMEOUTS,
     )
@@ -116,6 +121,7 @@ where
                 _ => StatusCode::BAD_GATEWAY,
             };
             AppError::new(status, format!("Upstream stream failed: {error}"))
+                .with_details(stream_error_details(&state, &error))
         })?;
         if event.data == "[DONE]" {
             done = true;
@@ -291,6 +297,7 @@ where
                     Err(error) => Err(("sse_json", format!("Invalid upstream SSE JSON: {error}"))),
                 },
                 Err(error) => {
+                    state.diagnostic_details = Some(stream_error_details(&state, &error));
                     let phase = match &error {
                         EventStreamError::Transport(error) => error.phase,
                         _ => "sse_frame",
@@ -335,6 +342,34 @@ struct StreamReadError {
     message: String,
     timed_out: bool,
     phase: &'static str,
+}
+
+fn response_metadata(response: &reqwest::Response) -> Value {
+    json!({
+        "status": response.status().as_u16(),
+        "contentType": response.headers().get("content-type").and_then(|value| value.to_str().ok()),
+        "contentEncoding": response.headers().get("content-encoding").and_then(|value| value.to_str().ok()),
+        "contentLength": response.content_length(),
+        "transferEncoding": response.headers().get("transfer-encoding").and_then(|value| value.to_str().ok()),
+    })
+}
+
+fn error_chain(error: &(dyn Error + 'static)) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = Some(error);
+    while let Some(error) = current {
+        chain.push(error.to_string());
+        current = error.source();
+    }
+    chain
+}
+
+fn stream_error_details(state: &StreamState, error: &(dyn Error + 'static)) -> Value {
+    let mut details = json!({"errorChain": error_chain(error)});
+    if let Some(response) = &state.response_metadata {
+        details["upstreamResponse"] = response.clone();
+    }
+    details
 }
 
 impl fmt::Display for StreamReadError {
@@ -430,6 +465,8 @@ struct StreamState {
     converted_usage: UsageConversion,
     upstream_usage: Option<Value>,
     error_details: Option<Value>,
+    response_metadata: Option<Value>,
+    diagnostic_details: Option<Value>,
 }
 
 impl StreamState {
@@ -452,7 +489,14 @@ impl StreamState {
             converted_usage: convert_usage(None),
             upstream_usage: None,
             error_details: None,
+            response_metadata: None,
+            diagnostic_details: None,
         }
+    }
+
+    fn with_response_metadata(mut self, metadata: Value) -> Self {
+        self.response_metadata = Some(metadata);
+        self
     }
 
     fn process_chunk(&mut self, chunk: &Value) -> Result<Vec<Value>, String> {
@@ -838,6 +882,12 @@ impl StreamState {
         let mut error = json!({"message": message, "type": "stream_error", "phase": phase, "elapsedMs": elapsed.as_millis()});
         if let Some(details) = &self.error_details {
             error["response"] = json!({"error": details});
+        }
+        if let Some(response) = &self.response_metadata {
+            error["upstreamResponse"] = response.clone();
+        }
+        if let Some(details) = &self.diagnostic_details {
+            error["diagnostic"] = details.clone();
         }
         json!({
             "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
