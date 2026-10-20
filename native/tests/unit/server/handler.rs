@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn conversion_error_log_exposes_phase_and_direction_without_changing_client_error() {
+    let error = AppError::bad_request("thinking.type: invalid").with_details(json!({
+        "phase":"request_conversion", "direction":"anthropic_to_chat"
+    }));
+    let record = error_record_value("req", "provider", "model", false, &error);
+    assert_eq!(record["error"]["phase"], "request_conversion");
+    assert_eq!(record["error"]["direction"], "anthropic_to_chat");
+    assert_eq!(record["error"]["message"], "thinking.type: invalid");
+}
+
+#[test]
 fn error_record_preserves_sanitized_upstream_details() {
     let shape = json!({"modelFamily": "glm-5"});
     let error = AppError::new(StatusCode::NOT_ACCEPTABLE, "Not Acceptable").with_details(json!({

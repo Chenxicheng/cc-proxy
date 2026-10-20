@@ -9,6 +9,68 @@ use super::{
     usage::convert_usage,
 };
 
+// Only fixed protocol paths and JSON types are logged, never payload values or arbitrary keys.
+pub(crate) fn response_shape(response: &Value) -> Value {
+    let mut fields = serde_json::Map::new();
+    for path in [
+        "",
+        "/choices",
+        "/choices/0",
+        "/choices/0/finish_reason",
+        "/choices/0/delta",
+        "/choices/0/message",
+    ] {
+        fields.insert(path.into(), json_type(response.pointer(path)).into());
+    }
+    for container in ["delta", "message"] {
+        for field in [
+            "role",
+            "content",
+            "refusal",
+            "reasoning_content",
+            "reasoning",
+            "tool_calls",
+            "audio",
+            "function_call",
+            "annotations",
+        ] {
+            let path = format!("/choices/0/{container}/{field}");
+            fields.insert(path.clone(), json_type(response.pointer(&path)).into());
+        }
+        if let Some(calls) = response
+            .pointer(&format!("/choices/0/{container}/tool_calls"))
+            .and_then(Value::as_array)
+        {
+            for index in 0..calls.len().min(8) {
+                for field in [
+                    "index",
+                    "id",
+                    "type",
+                    "function",
+                    "function/name",
+                    "function/arguments",
+                ] {
+                    let path = format!("/choices/0/{container}/tool_calls/{index}/{field}");
+                    fields.insert(path.clone(), json_type(response.pointer(&path)).into());
+                }
+            }
+        }
+    }
+    json!({"fieldTypes": fields, "choiceCount": response["choices"].as_array().map(Vec::len)})
+}
+
+fn json_type(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+    }
+}
+
 pub fn convert_response(
     response: &Value,
     original_model: &str,

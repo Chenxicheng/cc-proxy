@@ -105,7 +105,12 @@ async fn handle_messages(
         anthropic,
         state.config.upstream_capabilities.assistant_prefill,
         state.config.upstream_capabilities.max_tokens_field,
-    )?;
+    )
+    .map_err(|error| {
+        error.with_details(json!({
+            "phase": "request_conversion", "direction": "anthropic_to_chat"
+        }))
+    })?;
     let model = anthropic["model"].as_str().expect("validated model");
     let upstream_streaming = openai["stream"] == true;
     let tool_names = openai
@@ -174,8 +179,18 @@ async fn handle_messages(
             StatusCode::BAD_GATEWAY,
             format!("Invalid upstream JSON: {error}"),
         )
+        .with_details(json!({
+            "phase": "response_json", "direction": "chat_to_anthropic",
+            "jsonLine": error.line(), "jsonColumn": error.column(),
+            "bodyBytes": body.len(),
+        }))
     })?;
-    let converted = convert_response(&openai_response, model, &tool_names)?;
+    let converted = convert_response(&openai_response, model, &tool_names).map_err(|error| {
+        error.with_details(json!({
+            "phase": "protocol_conversion", "direction": "chat_to_anthropic",
+            "diagnostic": crate::protocol::response_shape(&openai_response),
+        }))
+    })?;
     let usage = convert_usage(openai_response.get("usage"));
     let empty_end_turn = converted["stop_reason"] == "end_turn"
         && converted["content"].as_array().is_some_and(Vec::is_empty);
@@ -234,6 +249,11 @@ fn error_record_value(
     });
     let mut request_shape = None;
     if let Some(response) = &error.details {
+        for field in ["phase", "direction"] {
+            if let Some(value) = response.get(field) {
+                details[field] = value.clone();
+            }
+        }
         if let Some(shape) = response.get("upstreamRequestShape") {
             request_shape = Some(shape.clone());
             details["response"] = response["response"].clone();

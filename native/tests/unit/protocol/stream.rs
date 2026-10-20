@@ -34,6 +34,183 @@ fn stream_error_record_contains_safe_upstream_metadata() {
 }
 use std::{io, time::Duration};
 
+#[tokio::test]
+async fn conversion_failures_record_field_types_without_content_in_both_paths() {
+    let data = json!({"choices":[{"delta":{"content":{"private":"secret-marker"}}}]});
+    let mut stream_state = state(&[]);
+    let (phase, message) = stream_state.process_data(&data.to_string()).unwrap_err();
+    assert_eq!(phase, "protocol_conversion");
+    assert!(message.contains("delta.content must be a string or null"));
+    let record = stream_state.error_record(&message, phase, Duration::ZERO);
+    assert_eq!(record["error"]["direction"], "chat_to_anthropic");
+    assert_eq!(record["error"]["streamState"]["chunkIndex"], 1);
+    assert_eq!(
+        record["error"]["diagnostic"]["fieldTypes"]["/choices/0/delta/content"],
+        "object"
+    );
+    assert!(!record.to_string().contains("secret-marker"));
+
+    let chunks =
+        futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(format!("data: {data}\n\n")))]);
+    let error = collect_bytes_with_timeouts(chunks, state(&[]), Instant::now(), STREAM_TIMEOUTS)
+        .await
+        .unwrap_err();
+    let details = error.details.unwrap();
+    assert_eq!(details["phase"], "protocol_conversion");
+    assert_eq!(details["chunkIndex"], 1);
+    assert_eq!(
+        details["diagnostic"]["fieldTypes"]["/choices/0/delta/content"],
+        "object"
+    );
+    assert!(!details.to_string().contains("secret-marker"));
+}
+
+#[test]
+fn stream_diagnostics_distinguish_json_syntax_and_post_finish_content() {
+    let mut state = state(&[]);
+    let (phase, _) = state.process_data("{broken").unwrap_err();
+    assert_eq!(phase, "sse_json");
+    assert!(
+        state.diagnostic_details.as_ref().unwrap()["jsonColumn"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let mut state = StreamState::new("model".into(), "provider".into(), "request".into(), vec![]);
+    state
+        .process_data(&chunk(json!({"content":"private"}), Some("stop")).to_string())
+        .unwrap();
+    let (phase, message) = state
+        .process_data(&chunk(json!({"content":"secret-marker"}), None).to_string())
+        .unwrap_err();
+    assert_eq!(phase, "protocol_conversion");
+    assert!(message.contains("content after finish_reason"));
+    let record = state.error_record(&message, phase, Duration::ZERO);
+    assert_eq!(record["error"]["streamState"]["chunkIndex"], 2);
+    assert_eq!(record["error"]["streamState"]["finishReasonSeen"], true);
+    assert!(!record.to_string().contains("secret-marker"));
+}
+
+#[tokio::test]
+async fn http_200_truncated_body_keeps_transport_cause_in_both_paths() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for buffered in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/?token=secret-marker",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                assert!(request.len() < 4096);
+                request.push(socket.read_u8().await.unwrap());
+            }
+            // Advertise a chunk longer than its payload, then close without a terminal chunk.
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nSet-Cookie: secret-marker\r\n\r\n1000\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let diagnostic = if buffered {
+            let error = collect_stream(
+                response,
+                "model".into(),
+                "provider".into(),
+                "request".into(),
+                Instant::now(),
+                vec![],
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+            assert!(!error.message.contains("secret-marker"));
+            assert!(!error.message.contains("end of file"));
+            error.details.unwrap()
+        } else {
+            let directory = tempfile::tempdir().unwrap();
+            let (storage, writer) = Storage::start(directory.path().to_path_buf());
+            let body = transform_stream(
+                response,
+                "model".into(),
+                "provider".into(),
+                storage,
+                "request".into(),
+                Instant::now(),
+                vec![],
+            );
+            let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(text.contains("event: error"));
+            assert!(!text.contains("event: message_stop"));
+            assert!(!text.contains("end of file"));
+            assert!(!text.contains("secret-marker"));
+            writer.await.unwrap();
+            let file = std::fs::read_dir(directory.path().join("error_logs"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let logs = std::fs::read_to_string(file).unwrap();
+            assert_eq!(logs.lines().count(), 1);
+            let record: Value = serde_json::from_str(logs.trim()).unwrap();
+            assert_eq!(record["error"]["phase"], "upstream_transport");
+            record["error"]["diagnostic"].clone()
+        };
+        server.await.unwrap();
+        assert_eq!(diagnostic["upstreamResponse"]["status"], 200);
+        assert!(!diagnostic.to_string().contains("secret-marker"));
+        let chain = diagnostic["errorChain"].as_array().unwrap();
+        assert!(chain.len() >= 2, "lost underlying cause: {diagnostic}");
+        assert!(
+            chain
+                .iter()
+                .any(|cause| cause.as_str().unwrap().contains("body")),
+            "{diagnostic}"
+        );
+        assert!(
+            chain.iter().any(|cause| {
+                let cause = cause.as_str().unwrap();
+                cause.contains("end of file before message length reached")
+            }),
+            "missing truncation cause: {diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn transport_error_chain_has_bounded_depth_and_text() {
+    #[derive(Debug)]
+    struct Nested(Option<Box<Nested>>);
+    impl fmt::Display for Nested {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&"界".repeat(600))
+        }
+    }
+    impl Error for Nested {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.0.as_deref().map(|error| error as &dyn Error)
+        }
+    }
+    let mut error = Nested(None);
+    for _ in 0..12 {
+        error = Nested(Some(Box::new(error)));
+    }
+    let chain = error_chain(&error);
+    assert_eq!(chain.len(), 8);
+    assert!(chain.iter().all(|message| message.chars().count() == 512));
+}
+
 fn transform_bytes<S, E>(upstream: S, state: StreamState, storage: Storage) -> Body
 where
     S: Stream<Item = Result<Bytes, E>> + Send + 'static,

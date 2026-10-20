@@ -13,6 +13,7 @@
 - Qwen requests ignore explicit effort and do not send `reasoning_effort`; GLM-5.2 maps effort to `high`/`max`, while GLM-5.3 maps it to `low`/`high`/`max`. Other GLM models reject unsupported explicit effort. Family matching is case-insensitive and uses the model-name prefix without assuming a generation number.
 - Responses include both `request-id` and `x-request-id`. Upstream error bodies are capped at 64 KiB, and valid `Retry-After` values are forwarded without automatic request retries.
 - Stream failures log a diagnostic phase and elapsed time in `error_logs/*.jsonl`; the terminal adds those safe fields to its request summary for correlation.
+- Conversion failures log the direction, validation message and fixed-path JSON field types; SSE diagnostics also identify the chunk and conversion state without copying content or tool argument values.
 - Prompt usage is split into uncached input, cache reads, and cache writes when the upstream counters are complete. Missing or invalid usage never discards an otherwise valid answer; degraded values are explicitly classified in usage JSONL and are not suitable for exact billing.
 
 See [docs/API.md](docs/API.md) for the complete request, response, streaming, and degradation rules.

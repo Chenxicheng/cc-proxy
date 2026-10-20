@@ -54,7 +54,9 @@ pub fn transform_stream(
 ) -> Body {
     let response_metadata = response_metadata(&response);
     transform_bytes_with_timeouts(
-        response.bytes_stream(),
+        response
+            .bytes_stream()
+            .map(|result| result.map_err(reqwest::Error::without_url)),
         StreamState::new(model, provider, request_id, tool_names)
             .with_response_metadata(response_metadata),
         storage,
@@ -73,7 +75,9 @@ pub async fn collect_stream(
 ) -> Result<(Value, Value), AppError> {
     let response_metadata = response_metadata(&response);
     collect_bytes_with_timeouts(
-        response.bytes_stream(),
+        response
+            .bytes_stream()
+            .map(|result| result.map_err(reqwest::Error::without_url)),
         StreamState::new(model, provider, request_id, tool_names)
             .with_response_metadata(response_metadata),
         headers_received_at,
@@ -127,15 +131,12 @@ where
             done = true;
             break;
         }
-        let chunk: Value = serde_json::from_str(&event.data).map_err(|error| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("Invalid upstream SSE JSON: {error}"),
-            )
-        })?;
         let output = state
-            .process_chunk(&chunk)
-            .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, message))?;
+            .process_data(&event.data)
+            .map_err(|(phase, message)| {
+                AppError::new(StatusCode::BAD_GATEWAY, message)
+                    .with_details(state.conversion_details(phase))
+            })?;
         if !output.is_empty() {
             waiting_for_first_event = false;
         }
@@ -143,10 +144,10 @@ where
             message.apply(&event)?;
         }
     }
-    for event in state
-        .finish(done)
-        .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, message))?
-    {
+    for event in state.finish(done).map_err(|message| {
+        AppError::new(StatusCode::BAD_GATEWAY, message)
+            .with_details(state.conversion_details("stream_finish"))
+    })? {
         message.apply(&event)?;
     }
     let mut usage_record = state.usage_record();
@@ -289,13 +290,7 @@ where
                     done = true;
                     break;
                 }
-                Ok(event) => match serde_json::from_str::<Value>(&event.data) {
-                    Ok(chunk) => state.process_chunk(&chunk).map_err(|message| {
-                        let phase = if chunk.get("error").is_some() { "upstream_sse_error" } else { "protocol_conversion" };
-                        (phase, message)
-                    }),
-                    Err(error) => Err(("sse_json", format!("Invalid upstream SSE JSON: {error}"))),
-                },
+                Ok(event) => state.process_data(&event.data),
                 Err(error) => {
                     state.diagnostic_details = Some(stream_error_details(&state, &error));
                     let phase = match &error {
@@ -340,6 +335,7 @@ where
 #[derive(Debug)]
 struct StreamReadError {
     message: String,
+    error_chain: Vec<String>,
     timed_out: bool,
     phase: &'static str,
 }
@@ -354,18 +350,30 @@ fn response_metadata(response: &reqwest::Response) -> Value {
     })
 }
 
-fn error_chain(error: &(dyn Error + 'static)) -> Vec<String> {
+fn error_chain(error: &dyn Error) -> Vec<String> {
     let mut chain = Vec::new();
     let mut current = Some(error);
     while let Some(error) = current {
-        chain.push(error.to_string());
+        if chain.len() == 8 {
+            break;
+        }
+        chain.push(error.to_string().chars().take(512).collect());
         current = error.source();
     }
     chain
 }
 
-fn stream_error_details(state: &StreamState, error: &(dyn Error + 'static)) -> Value {
-    let mut details = json!({"errorChain": error_chain(error)});
+fn stream_error_details(state: &StreamState, error: &EventStreamError<StreamReadError>) -> Value {
+    // EventStreamError does not expose its transport error through Error::source().
+    let chain = match error {
+        EventStreamError::Transport(error) => error.error_chain.clone(),
+        _ => vec!["Upstream SSE framing or UTF-8 decoding failed".to_owned()],
+    };
+    let phase = match error {
+        EventStreamError::Transport(error) => error.phase,
+        _ => "sse_frame",
+    };
+    let mut details = json!({"errorChain": chain, "phase": phase});
     if let Some(response) = &state.response_metadata {
         details["upstreamResponse"] = response.clone();
     }
@@ -402,7 +410,8 @@ where
                     deadline = Instant::now() + timeouts.body_idle;
                 }
                 Ok(Some(Err(error))) => {
-                    yield Err(StreamReadError { message: error.to_string(), timed_out: false, phase: "upstream_transport" });
+                    let error_chain = error_chain(&error);
+                    yield Err(StreamReadError { message: error.to_string(), error_chain, timed_out: false, phase: "upstream_transport" });
                     break;
                 }
                 Ok(None) => break,
@@ -413,7 +422,7 @@ where
                         "Upstream stream was idle for too long"
                     };
                     let phase = if first { "first_body_bytes" } else { "body_idle" };
-                    yield Err(StreamReadError { message: message.into(), timed_out: true, phase });
+                    yield Err(StreamReadError { message: message.into(), error_chain: vec![message.into()], timed_out: true, phase });
                     break;
                 }
             }
@@ -467,6 +476,7 @@ struct StreamState {
     error_details: Option<Value>,
     response_metadata: Option<Value>,
     diagnostic_details: Option<Value>,
+    chunk_index: u64,
 }
 
 impl StreamState {
@@ -491,12 +501,47 @@ impl StreamState {
             error_details: None,
             response_metadata: None,
             diagnostic_details: None,
+            chunk_index: 0,
         }
     }
 
     fn with_response_metadata(mut self, metadata: Value) -> Self {
         self.response_metadata = Some(metadata);
         self
+    }
+
+    fn conversion_details(&self, phase: &str) -> Value {
+        json!({
+            "phase": phase,
+            "direction": "chat_to_anthropic",
+            "chunkIndex": self.chunk_index,
+            "messageStarted": self.started,
+            "contentSeen": self.content_seen,
+            "finishReasonSeen": self.finish_reason.is_some(),
+            "toolCount": self.tools.len(),
+            "diagnostic": self.diagnostic_details,
+            "upstreamResponse": self.response_metadata,
+        })
+    }
+
+    fn process_data(&mut self, data: &str) -> Result<Vec<Value>, (&'static str, String)> {
+        self.chunk_index = self.chunk_index.saturating_add(1);
+        let chunk: Value = serde_json::from_str(data).map_err(|error| {
+            self.diagnostic_details = Some(json!({
+                "jsonLine": error.line(), "jsonColumn": error.column(),
+                "eventBytes": data.len(),
+            }));
+            ("sse_json", format!("Invalid upstream SSE JSON: {error}"))
+        })?;
+        self.process_chunk(&chunk).map_err(|message| {
+            self.diagnostic_details = Some(super::response_shape(&chunk));
+            let phase = if chunk.get("error").is_some() {
+                "upstream_sse_error"
+            } else {
+                "protocol_conversion"
+            };
+            (phase, message)
+        })
     }
 
     fn process_chunk(&mut self, chunk: &Value) -> Result<Vec<Value>, String> {
@@ -880,6 +925,14 @@ impl StreamState {
 
     fn error_record(&self, message: &str, phase: &str, elapsed: Duration) -> Value {
         let mut error = json!({"message": message, "type": "stream_error", "phase": phase, "elapsedMs": elapsed.as_millis()});
+        error["streamState"] = json!({
+            "chunkIndex": self.chunk_index, "messageStarted": self.started,
+            "contentSeen": self.content_seen, "finishReasonSeen": self.finish_reason.is_some(),
+            "toolCount": self.tools.len(),
+        });
+        if matches!(phase, "protocol_conversion" | "sse_json" | "stream_finish") {
+            error["direction"] = json!("chat_to_anthropic");
+        }
         if let Some(details) = &self.error_details {
             error["response"] = json!({"error": details});
         }

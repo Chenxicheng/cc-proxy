@@ -1,5 +1,9 @@
 # HTTP API Reference
 
+Transport failure diagnostics retain the original HTTP body error chain before SSE wrapping. Chains are limited to eight entries of 512 characters each; request URLs are removed from reqwest errors. Streaming JSONL stores these under `error.diagnostic.errorChain`, while buffered SSE failures store them under `error.response.errorChain`. Both include `upstreamResponse` metadata (status and selected content/transfer headers); diagnostics are not added to client error messages. HTTP 200 indicates successful response headers, not a complete response body.
+
+Conversion errors retain the specific validation message in `error.message`. `request_conversion` identifies Anthropic-to-Chat conversion; `protocol_conversion` identifies Chat-to-Anthropic conversion. Response JSON syntax errors use `response_json`, and SSE JSON syntax errors use `sse_json`, with line/column and byte counts. Failed response conversion includes a fixed allowlist of JSON pointer paths and their types (`missing` is distinct from `null`), with tool field types limited to the first eight calls in the first choice. No payload values or arbitrary property names are copied into this shape. For streaming, `error.diagnostic` contains the shape and `error.streamState` reports the 1-based JSON-event attempt count, message/content/finish flags and tool count. Buffered SSE failures include the same conversion context under `error.response`; HTTP error logs expose `phase` and `direction` at `error` level. Stream-finish errors include state without a failing chunk. These diagnostics supplement existing error messages and upstream error bodies; they do not sanitize those existing fields.
+
 cc-proxy is a CLI product. It starts a native Rust proxy and does not export Node.js server or converter APIs.
 
 ## `POST /v1/messages`

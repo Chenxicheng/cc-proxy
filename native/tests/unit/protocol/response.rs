@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+fn response_diagnostics_bound_tool_fields_and_exclude_payload_values() {
+    let body = json!({"choices":[{"message":{"content":"secret-marker", "tool_calls":
+        vec![json!({"function":{"name":"secret-marker", "arguments":{"private":"secret-marker"}}}); 12]
+    }}], "secret-marker": "secret-marker"});
+    let shape = response_shape(&body);
+    assert_eq!(
+        shape["fieldTypes"]["/choices/0/message/tool_calls/0/function/arguments"],
+        "object"
+    );
+    assert!(
+        shape["fieldTypes"]
+            .get("/choices/0/message/tool_calls/8/function/arguments")
+            .is_none()
+    );
+    assert!(!shape.to_string().contains("secret-marker"));
+}
+
 fn convert(response: &Value, model: &str) -> Result<Value, AppError> {
     super::convert_response(response, model, &["lookup".to_owned()])
 }

@@ -6,7 +6,15 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ---
 
-## [Unreleased]
+## [1.3.2] — 2026-10-20
+
+### Fixed
+
+- Capture streaming transport error causes before SSE wrapping discards them, including buffered SSE responses; bound diagnostic chains and remove request URLs.
+
+### Added
+
+- Identify request/response conversion failures by direction, JSON field types and SSE event position/state; record syntax error locations without copying payload values.
 
 ## [1.3.1] — 2026-10-19
 
