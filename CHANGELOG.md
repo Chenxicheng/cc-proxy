@@ -6,6 +6,23 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ---
 
+## [Unreleased]
+
+## [1.3.4] — 2026-10-21
+
+### Added
+
+- Add customer-side failure diagnostics for connection/header errors and non-streaming bodies, preserving bounded error chains, upstream status/IDs, request controls and body progress.
+- Include package/build/platform identity in error records and expose logging I/O failures and the actual log directory through `/health`.
+
+### Security
+
+- Omit upstream error bodies from JSONL; retain only allowlisted error classifications. Redact configured credentials, URL details and quoted free-text values, and bound diagnostic strings and collections. Client-facing upstream error behavior is unchanged.
+
+### Changed
+
+- Remove Qwen-specific request conversion and buffered SSE handling. Qwen now follows generic Chat streaming, thinking/effort and reasoning-history rules without `enable_thinking` injection.
+
 ## [1.3.2] — 2026-10-20
 
 ### Fixed
