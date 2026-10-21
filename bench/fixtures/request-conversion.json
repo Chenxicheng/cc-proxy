@@ -448,7 +448,7 @@
     }
   },
   {
-    "name": "qwen thinking buffers a streamed upstream for a non-streaming client",
+    "name": "qwen thinking follows generic non-streaming conversion",
     "input": {
       "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
       "stream": false, "thinking": { "type": "enabled" },
@@ -456,8 +456,8 @@
     },
     "expected": {
       "model": "qwen/qwen3.6-35b-a3b", "max_completion_tokens": 100,
-      "stream": true, "stream_options": { "include_usage": true },
-      "enable_thinking": true,
+      "stream": false,
+      "reasoning_effort": "high",
       "messages": [{ "role": "user", "content": "Hello" }]
     }
   },
@@ -524,7 +524,7 @@
     }
   },
   {
-    "name": "Qwen 3.8 ignores explicit effort",
+    "name": "Qwen 3.8 follows generic explicit effort mapping",
     "input": {
       "model": "qwen3.8-27b", "max_tokens": 100,
       "output_config": { "effort": "medium" },
@@ -533,6 +533,7 @@
     "expected": {
       "model": "qwen3.8-27b", "max_completion_tokens": 100,
       "stream": false,
+      "reasoning_effort": "medium",
       "messages": [{ "role": "user", "content": "Think" }]
     }
   }

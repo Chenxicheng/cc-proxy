@@ -8,7 +8,10 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use serde_json::{Value, json};
 use tokio::time::{Instant, timeout, timeout_at};
 
-use crate::{config::AdapterConfig, error::AppError};
+use crate::{
+    config::AdapterConfig,
+    error::{AppError, BodyProgress, error_chain, response_metadata},
+};
 
 pub(super) const STREAM_RESPONSE_HEADERS_TIMEOUT: Duration = Duration::from_secs(120);
 pub(super) const NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -23,15 +26,22 @@ pub(super) async fn await_upstream_headers<F>(
 where
     F: Future<Output = reqwest::Result<reqwest::Response>>,
 {
+    let started = Instant::now();
     tokio::time::timeout(timeout, response)
         .await
         .map_err(|_| {
             AppError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "Upstream timed out waiting for response headers",
-            )
+            ).with_details(json!({"phase":"response_headers_timeout", "elapsedMs":started.elapsed().as_millis()}))
         })?
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))
+        .map_err(|error| {
+            let error = error.without_url();
+            AppError::new(StatusCode::BAD_GATEWAY, error.to_string()).with_details(json!({
+                "phase":if error.is_connect() { "upstream_connect" } else { "response_headers_transport" }, "elapsedMs":started.elapsed().as_millis(),
+                "errorChain":error_chain(&error), "isConnect":error.is_connect(), "isTimeout":error.is_timeout()
+            }))
+        })
 }
 
 pub(super) async fn upstream_error(
@@ -41,17 +51,23 @@ pub(super) async fn upstream_error(
 ) -> AppError {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let metadata = response_metadata(&response);
     let retry_after = response
         .headers()
         .get(header::RETRY_AFTER)
         .filter(|value| valid_retry_after(value))
         .cloned();
-    let (body, truncated) = match read_upstream_error_body(&mut response, deadline).await {
+    let (body, truncated, transfer) = match read_upstream_error_body(&mut response, deadline).await
+    {
         Ok(result) => result,
-        Err(error) => return error,
+        Err(error) => {
+            return error
+                .with_context(json!({"upstreamRequestShape":upstream_request_shape(request)}));
+        }
     };
     let text = String::from_utf8_lossy(&body).into_owned();
     build_upstream_error(status, text, upstream_request_shape(request), truncated)
+        .with_context(json!({"upstreamResponse":metadata, "transfer":transfer}))
         .with_retry_after(retry_after)
 }
 
@@ -69,82 +85,96 @@ fn valid_retry_after(value: &HeaderValue) -> bool {
 async fn read_upstream_error_body(
     response: &mut reqwest::Response,
     deadline: Instant,
-) -> Result<(Vec<u8>, bool), AppError> {
-    let mut body = Vec::new();
-    loop {
-        let chunk = timeout_at(
-            deadline,
-            timeout(NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT, response.chunk()),
-        )
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Upstream response exceeded the total deadline",
-            )
-        })?
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Upstream response body stalled",
-            )
-        })?
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
-        let Some(chunk) = chunk else {
-            return Ok((body, false));
-        };
-        let remaining = ERROR_RESPONSE_BODY_LIMIT - body.len();
-        if chunk.len() > remaining {
-            body.extend_from_slice(&chunk[..remaining]);
-            return Ok((body, true));
-        }
-        body.extend_from_slice(&chunk);
-    }
+) -> Result<(Vec<u8>, bool, Value), AppError> {
+    read_body(response, deadline, ERROR_RESPONSE_BODY_LIMIT, true).await
 }
 
 pub(super) async fn read_upstream_body(
     mut response: reqwest::Response,
     deadline: Instant,
-) -> Result<Vec<u8>, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|size| size > NONSTREAM_RESPONSE_BODY_LIMIT as u64)
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "Upstream response exceeds the 32 MiB limit",
-        ));
-    }
-    let mut body = Vec::new();
-    loop {
-        let chunk = timeout_at(
-            deadline,
-            timeout(NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT, response.chunk()),
-        )
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Upstream response exceeded the total deadline",
-            )
-        })?
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Upstream response body stalled",
-            )
-        })?
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
-        let Some(chunk) = chunk else { break };
-        if chunk.len() > NONSTREAM_RESPONSE_BODY_LIMIT - body.len() {
+) -> Result<(Vec<u8>, Value), AppError> {
+    read_body(
+        &mut response,
+        deadline,
+        NONSTREAM_RESPONSE_BODY_LIMIT,
+        false,
+    )
+    .await
+    .map(|(body, _, transfer)| (body, transfer))
+}
+
+async fn read_body(
+    response: &mut reqwest::Response,
+    deadline: Instant,
+    limit: usize,
+    truncate: bool,
+) -> Result<(Vec<u8>, bool, Value), AppError> {
+    let metadata = response_metadata(response);
+    let mut progress = BodyProgress::new(Instant::now());
+    let result = async {
+        if !truncate
+            && response
+                .content_length()
+                .is_some_and(|size| size > limit as u64)
+        {
             return Err(AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "Upstream response exceeds the 32 MiB limit",
-            ));
+            )
+            .with_details(json!({"phase":"response_body_limit"})));
         }
-        body.extend_from_slice(&chunk);
+        let mut body = Vec::new();
+        loop {
+            let chunk = timeout_at(
+                deadline,
+                timeout(NONSTREAM_RESPONSE_BODY_IDLE_TIMEOUT, response.chunk()),
+            )
+            .await
+            .map_err(|_| {
+                AppError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "Upstream response exceeded the total deadline",
+                )
+                .with_details(json!({"phase":"response_total_timeout"}))
+            })?
+            .map_err(|_| {
+                AppError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "Upstream response body stalled",
+                )
+                .with_details(json!({"phase":"body_idle"}))
+            })?
+            .map_err(|error| {
+                let error = error.without_url();
+                AppError::new(StatusCode::BAD_GATEWAY, error.to_string()).with_details(
+                    json!({"phase":"upstream_transport", "errorChain":error_chain(&error)}),
+                )
+            })?;
+            let Some(chunk) = chunk else {
+                return Ok((body, false));
+            };
+            progress.received(chunk.len());
+            let remaining = limit - body.len();
+            if chunk.len() > remaining {
+                if truncate {
+                    body.extend_from_slice(&chunk[..remaining]);
+                    return Ok((body, true));
+                }
+                return Err(AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "Upstream response exceeds the 32 MiB limit",
+                )
+                .with_details(json!({"phase":"response_body_limit"})));
+            }
+            body.extend_from_slice(&chunk);
+        }
     }
-    Ok(body)
+    .await;
+    result
+        .map(|(body, truncated)| (body, truncated, progress.snapshot()))
+        .map_err(|error| {
+            error.with_context(json!({"upstreamResponse":metadata, "transfer":progress.snapshot()}))
+        })
 }
 
 fn build_upstream_error(
@@ -169,13 +199,15 @@ fn build_upstream_error(
         message
     };
     AppError::new(status, message).with_details(json!({
-        "response": details,
+        "phase": "upstream_http",
+        "response": {"bodyBytes": text.len(), "bodyOmitted": true,
+            "error":crate::error::upstream_error_summary(&details["error"])},
         "responseTruncated": truncated,
         "upstreamRequestShape": request_shape,
     }))
 }
 
-fn upstream_request_shape(request: &Value) -> Value {
+pub(super) fn upstream_request_shape(request: &Value) -> Value {
     let object = request.as_object();
     let mut top_level_fields = object
         .map(|object| object.keys().cloned().collect::<Vec<_>>())
@@ -186,13 +218,15 @@ fn upstream_request_shape(request: &Value) -> Value {
     let mut content_types = BTreeMap::<String, u64>::new();
     if let Some(messages) = request.get("messages").and_then(Value::as_array) {
         for message in messages {
-            message_roles.push(
-                message
-                    .get("role")
-                    .and_then(Value::as_str)
-                    .unwrap_or("invalid")
-                    .to_owned(),
-            );
+            if message_roles.len() < 128 {
+                message_roles.push(
+                    message
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("invalid")
+                        .to_owned(),
+                );
+            }
             match message.get("content") {
                 Some(Value::String(_)) => *content_types.entry("string".into()).or_default() += 1,
                 Some(Value::Array(parts)) => {
@@ -281,6 +315,11 @@ fn upstream_request_shape(request: &Value) -> Value {
         "toolChoiceType": tool_choice_type,
         "modelFamily": model_family,
         "stream": request.get("stream").and_then(Value::as_bool),
+        "clientStream": request.get("stream").and_then(Value::as_bool),
+        "reasoningEffort": request.get("reasoning_effort").and_then(Value::as_str),
+        "enableThinking": request.get("enable_thinking").and_then(Value::as_bool),
+        "thinkingType": request.pointer("/thinking/type").and_then(Value::as_str),
+        "conversionPolicy": if request["model"].as_str().is_some_and(|m| m.rsplit('/').next().unwrap_or(m).to_ascii_lowercase().starts_with("glm")) { "glm" } else { "generic_chat" },
         "thinkingPresent": request.get("thinking").is_some()
             || request.get("enable_thinking").is_some()
             || request.get("reasoning_effort").is_some(),

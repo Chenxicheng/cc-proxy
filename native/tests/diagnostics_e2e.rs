@@ -51,6 +51,20 @@ async fn serve_upstream(listener: tokio::net::TcpListener) {
             drop(reader);
             let request: Value = serde_json::from_slice(&body).unwrap();
             let model = request["model"].as_str().unwrap_or("");
+            if matches!(model, "nonstream-eof" | "rejection-eof") {
+                let status = if model == "rejection-eof" {
+                    "429 Too Many Requests"
+                } else {
+                    "200 OK"
+                };
+                socket.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: 999\r\nx-request-id: upstream-case-123\r\nset-cookie: private-cookie\r\nconnection: close\r\n\r\n{{\"private\":\"partial\"").as_bytes()).await.unwrap();
+                return;
+            }
+            if model == "qwen3.8-27b" {
+                assert_eq!(request["stream"], false);
+                assert!(request.get("enable_thinking").is_none());
+                assert_eq!(request["reasoning_effort"], "low");
+            }
             let (payload, status) = match model {
                 "field-shape" => (
                     "data: {\"choices\":[{\"delta\":{\"content\":{\"private\":true}},\"finish_reason\":null}]}\r\n\r\n",
@@ -62,7 +76,7 @@ async fn serve_upstream(listener: tokio::net::TcpListener) {
                     "200 OK",
                 ),
             };
-            if model.starts_with("qwen") {
+            if model == "qwen3.8-stream" {
                 let _ = socket
                     .write_all(
                         b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n100\r\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":null}]}\n\n",
@@ -157,8 +171,10 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
         ("baseline", false, 200, false),
         ("field-shape", true, 200, false),
         ("invalid-json", true, 200, false),
-        ("qwen3.8-27b", false, 502, true),
+        ("qwen3.8-27b", false, 200, true),
         ("qwen3.8-stream", true, 200, true),
+        ("nonstream-eof", false, 502, false),
+        ("rejection-eof", false, 502, false),
     ] {
         let mut request = json!({
             "model": model, "stream": streaming, "max_tokens": 32,
@@ -176,7 +192,7 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
         assert_eq!(response.headers()["request-id"], id);
         let body = response.text().await.unwrap();
         assert_eq!(actual_status, status, "{model}: {body}");
-        if model == "baseline" {
+        if model == "baseline" || model == "qwen3.8-27b" {
             assert!(body.contains("baseline-ok"));
         } else if model.starts_with("qwen3.8") {
             assert!(!body.contains("errorChain"));
@@ -192,6 +208,41 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
         request_ids.push((model, id));
     }
 
+    upstream.abort();
+    let _ = upstream.await;
+    let response = client
+        .post(&url)
+        .json(&json!({
+            "model":"connect-error", "max_tokens":32, "stream":false,
+            "messages":[{"role":"user","content":"private-connect-prompt"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    request_ids.push((
+        "connect-error",
+        response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned(),
+    ));
+    response.bytes().await.unwrap();
+    let health: Value = client
+        .get(url.replace("/v1/messages", "/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["logging"]["ioFailureCount"], 0);
+    assert!(
+        health["logging"]["errorDirectory"]
+            .as_str()
+            .unwrap()
+            .ends_with("error_logs")
+    );
     proxy
         .0
         .stdin
@@ -202,9 +253,49 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
     assert!(proxy.0.wait().unwrap().success());
     let logs = logs.join().unwrap();
     let errors = read_error_logs(directory.path());
-    assert_eq!(errors.len(), 4);
+    assert_eq!(errors.len(), 6);
+    let connection = errors
+        .iter()
+        .find(|r| r["modelName"] == "connect-error")
+        .unwrap();
+    assert_eq!(connection["error"]["phase"], "upstream_connect");
+    assert!(connection["error"]["errorChain"].as_array().unwrap().len() > 1);
+    assert!(connection["error"]["upstreamResponse"].is_null());
+    assert!(!connection.to_string().contains("private-connect-prompt"));
+    for record in &errors {
+        assert_eq!(record["diagnosticsVersion"], 1);
+        let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+        assert_eq!(record["build"]["packageVersion"], package["version"]);
+        assert!(record["build"]["revision"].is_string());
+        assert!(record["build"]["os"].is_string());
+        assert!(record["upstreamRequestShape"]["clientStream"].is_boolean());
+        assert_eq!(
+            record["upstreamRequestShape"]["conversionPolicy"],
+            "generic_chat"
+        );
+        assert!(!record.to_string().contains("diagnostic E2E fixture"));
+        assert!(!record.to_string().contains("local-test-key"));
+        assert!(!record.to_string().contains("private-cookie"));
+    }
+    for (model, upstream_status) in [("nonstream-eof", 200), ("rejection-eof", 429)] {
+        let record = errors.iter().find(|r| r["modelName"] == model).unwrap();
+        let error = &record["error"];
+        assert_eq!(error["phase"], "upstream_transport");
+        assert_transport_chain_has_body_eof(error["errorChain"].as_array().unwrap());
+        assert_eq!(error["upstreamResponse"]["status"], upstream_status);
+        assert_eq!(error["upstreamResponse"]["xRequestId"], "upstream-case-123");
+        assert_eq!(error["upstreamResponse"]["contentLength"], 999);
+        assert!(error["transfer"]["receivedBytes"].as_u64().unwrap() > 0);
+        assert!(error["transfer"]["firstByteMs"].is_number());
+        assert!(error["transfer"]["sinceLastByteMs"].is_number());
+        assert!(error["headersMs"].is_number());
+        assert!(error["requestElapsedMs"].is_number());
+    }
 
-    for (model, id) in request_ids.iter().filter(|(model, _)| *model != "baseline") {
+    for (model, id) in request_ids
+        .iter()
+        .filter(|(model, _)| *model != "baseline" && *model != "qwen3.8-27b")
+    {
         let records: Vec<_> = errors
             .iter()
             .filter(|record| record["requestId"] == id.as_str())
@@ -253,21 +344,6 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
     assert!(invalid_json["error"]["diagnostic"]["jsonLine"].is_number());
     assert!(invalid_json["error"]["diagnostic"]["jsonColumn"].is_number());
 
-    let qwen_buffered = errors
-        .iter()
-        .find(|record| record["requestId"] == request_ids[3].1)
-        .unwrap();
-    assert_eq!(qwen_buffered["streaming"], false);
-    assert_eq!(qwen_buffered["error"]["phase"], "upstream_transport");
-    let buffered_chain = qwen_buffered["error"]["response"]["errorChain"]
-        .as_array()
-        .unwrap();
-    assert_transport_chain_has_body_eof(buffered_chain);
-    assert_eq!(
-        qwen_buffered["error"]["response"]["upstreamResponse"]["status"],
-        200
-    );
-
     let qwen_streaming = errors
         .iter()
         .find(|record| record["requestId"] == request_ids[4].1)
@@ -279,8 +355,17 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
         .unwrap();
     assert_transport_chain_has_body_eof(streaming_chain);
     assert_eq!(qwen_streaming["error"]["upstreamResponse"]["status"], 200);
-
-    upstream.abort();
+    assert!(
+        qwen_streaming["error"]["transfer"]["receivedBytes"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        qwen_streaming["upstreamRequestShape"]["reasoningEffort"],
+        "low"
+    );
+    assert!(qwen_streaming["upstreamRequestShape"]["enableThinking"].is_null());
 }
 
 fn assert_transport_chain_has_body_eof(chain: &[Value]) {

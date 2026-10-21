@@ -11,9 +11,9 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::{
-    error::AppError,
+    error::{AppError, response_metadata, safe_text},
     protocol::{
-        collect_stream, convert_request_with_mode, convert_response, convert_usage,
+        StreamRequest, convert_request_with_mode, convert_response, convert_usage,
         record_usage_metadata, transform_stream,
     },
 };
@@ -22,7 +22,7 @@ use super::{
     AppState,
     upstream::{
         NONSTREAM_RESPONSE_TOTAL_TIMEOUT, STREAM_RESPONSE_HEADERS_TIMEOUT, await_upstream_headers,
-        read_upstream_body, upstream_error,
+        read_upstream_body, upstream_error, upstream_request_shape,
     },
 };
 
@@ -33,6 +33,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         "status": "ok",
         "adapter": "cc-proxy",
         "dropped_jsonl_records": state.storage.dropped_count(),
+        "logging": state.storage.health(),
     }))
 }
 
@@ -52,6 +53,9 @@ pub(super) async fn messages(
                 AppError::new(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "Request body exceeds the 32 MiB limit",
+                )
+                .with_details(
+                    json!({"phase":"request_body_limit", "elapsedMs":0, "upstreamAttempted":false}),
                 ),
             );
         }
@@ -64,7 +68,9 @@ pub(super) async fn messages(
                 &request_id,
                 "unknown",
                 false,
-                AppError::bad_request(format!("body: Invalid JSON: {error}")),
+                AppError::bad_request(format!("body: Invalid JSON: {error}")).with_details(
+                    json!({"phase":"request_json", "elapsedMs":0, "upstreamAttempted":false}),
+                ),
             );
         }
     };
@@ -100,6 +106,7 @@ async fn handle_messages(
     request_id: &str,
     anthropic: &Value,
 ) -> Result<Response, AppError> {
+    let started = tokio::time::Instant::now();
     let streaming = anthropic.get("stream").and_then(Value::as_bool) == Some(true);
     let openai = convert_request_with_mode(
         anthropic,
@@ -108,114 +115,124 @@ async fn handle_messages(
     )
     .map_err(|error| {
         error.with_details(json!({
-            "phase": "request_conversion", "direction": "anthropic_to_chat"
+            "phase": "request_conversion", "direction": "anthropic_to_chat",
+            "elapsedMs":started.elapsed().as_millis(), "upstreamAttempted":false,
+            "clientStream":streaming
         }))
     })?;
-    let model = anthropic["model"].as_str().expect("validated model");
-    let upstream_streaming = openai["stream"] == true;
-    let tool_names = openai
-        .get("tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|tool| {
-            tool.pointer("/function/name")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect::<Vec<_>>();
-    eprintln!("-> {model} [sent] {request_id}");
-    let request = state
-        .client
-        .post(state.config.chat_completions_url())
-        .json(&openai);
-    let upstream_deadline = tokio::time::Instant::now() + NONSTREAM_RESPONSE_TOTAL_TIMEOUT;
-    let response = await_upstream_headers(request.send(), STREAM_RESPONSE_HEADERS_TIMEOUT).await?;
-    let headers_received_at = tokio::time::Instant::now();
-    if !response.status().is_success() {
-        return Err(upstream_error(response, &openai, upstream_deadline).await);
-    }
+    let mut request_shape = upstream_request_shape(&openai);
+    request_shape["clientStream"] = json!(streaming);
+    let mut metadata = Value::Null;
+    let mut headers_ms = None;
+    let mut transfer = Value::Null;
+    let result = async {
+        let model = anthropic["model"].as_str().expect("validated model");
+        let tool_names = openai
+            .get("tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| {
+                tool.pointer("/function/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        eprintln!("-> {model} [sent] {request_id}");
+        let request = state
+            .client
+            .post(state.config.chat_completions_url())
+            .json(&openai);
+        let upstream_deadline = tokio::time::Instant::now() + NONSTREAM_RESPONSE_TOTAL_TIMEOUT;
+        let response =
+            await_upstream_headers(request.send(), STREAM_RESPONSE_HEADERS_TIMEOUT).await?;
+        let headers_received_at = tokio::time::Instant::now();
+        headers_ms = Some(started.elapsed().as_millis());
+        metadata = response_metadata(&response);
+        if !response.status().is_success() {
+            return Err(upstream_error(response, &openai, upstream_deadline).await);
+        }
 
-    if streaming {
-        let body = transform_stream(
-            response,
-            model.to_owned(),
-            state.config.base_url.clone(),
-            state.storage.clone(),
-            request_id.to_owned(),
-            headers_received_at,
-            tool_names,
-        );
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/event-stream")
-            .header(header::CACHE_CONTROL, "no-cache")
-            .header(header::CONNECTION, "keep-alive")
-            .header("x-accel-buffering", "no")
-            .body(body)
-            .expect("valid streaming response");
-        eprintln!("<- {model} [streaming] {request_id}");
-        return Ok(response);
-    }
+        if streaming {
+            let body = transform_stream(
+                response,
+                StreamRequest {
+                    model: model.to_owned(),
+                    provider: state.config.base_url.clone(),
+                    request_id: request_id.to_owned(),
+                    tool_names,
+                    summary: request_shape.clone(),
+                    started,
+                },
+                state.storage.clone(),
+                headers_received_at,
+            );
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::CONNECTION, "keep-alive")
+                .header("x-accel-buffering", "no")
+                .body(body)
+                .expect("valid streaming response");
+            eprintln!("<- {model} [streaming] {request_id}");
+            return Ok(response);
+        }
 
-    if upstream_streaming {
-        let (converted, usage_record) = collect_stream(
-            response,
-            model.to_owned(),
-            state.config.base_url.clone(),
-            request_id.to_owned(),
-            headers_received_at,
-            tool_names,
-        )
-        .await?;
-        state.storage.record_usage(usage_record);
+        let (body, progress) = read_upstream_body(response, upstream_deadline).await?;
+        transfer = progress;
+        let openai_response: Value = serde_json::from_slice(&body).map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("Invalid upstream JSON: {error}"),
+            )
+            .with_details(json!({
+                "phase": "response_json", "direction": "chat_to_anthropic",
+                "jsonLine": error.line(), "jsonColumn": error.column(),
+                "bodyBytes": body.len(),
+            }))
+        })?;
+        let converted =
+            convert_response(&openai_response, model, &tool_names).map_err(|error| {
+                error.with_details(json!({
+                    "phase": "protocol_conversion", "direction": "chat_to_anthropic",
+                    "diagnostic": crate::protocol::response_shape(&openai_response),
+                }))
+            })?;
+        let usage = convert_usage(openai_response.get("usage"));
+        let empty_end_turn = converted["stop_reason"] == "end_turn"
+            && converted["content"].as_array().is_some_and(Vec::is_empty);
+        let mut record = json!({
+            "timestamp": now(),
+            "requestId": request_id,
+            "schemaVersion": 2,
+            "provider": state.config.base_url,
+            "modelName": model,
+            "streaming": false,
+            "outcome": if empty_end_turn { "empty_end_turn" } else { "usable" },
+        });
+        record_usage_metadata(&mut record, &usage);
+        if let Some(raw_usage) = openai_response
+            .get("usage")
+            .filter(|usage| !usage.is_null())
+        {
+            record["usage"] = raw_usage.clone();
+        }
+        if let Some(actual_model) = openai_response.get("model") {
+            record["model"] = actual_model.clone();
+        }
+        state.storage.record_usage(record);
         eprintln!("<- {model} [received] {request_id}");
-        return Ok(Json(converted).into_response());
+        Ok(Json(converted).into_response())
     }
-
-    let body = read_upstream_body(response, upstream_deadline).await?;
-    let openai_response: Value = serde_json::from_slice(&body).map_err(|error| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("Invalid upstream JSON: {error}"),
-        )
-        .with_details(json!({
-            "phase": "response_json", "direction": "chat_to_anthropic",
-            "jsonLine": error.line(), "jsonColumn": error.column(),
-            "bodyBytes": body.len(),
-        }))
-    })?;
-    let converted = convert_response(&openai_response, model, &tool_names).map_err(|error| {
-        error.with_details(json!({
-            "phase": "protocol_conversion", "direction": "chat_to_anthropic",
-            "diagnostic": crate::protocol::response_shape(&openai_response),
-        }))
-    })?;
-    let usage = convert_usage(openai_response.get("usage"));
-    let empty_end_turn = converted["stop_reason"] == "end_turn"
-        && converted["content"].as_array().is_some_and(Vec::is_empty);
-    let mut record = json!({
-        "timestamp": now(),
-        "requestId": request_id,
-        "schemaVersion": 2,
-        "provider": state.config.base_url,
-        "modelName": model,
-        "streaming": false,
-        "outcome": if empty_end_turn { "empty_end_turn" } else { "usable" },
-    });
-    record_usage_metadata(&mut record, &usage);
-    if let Some(raw_usage) = openai_response
-        .get("usage")
-        .filter(|usage| !usage.is_null())
-    {
-        record["usage"] = raw_usage.clone();
-    }
-    if let Some(actual_model) = openai_response.get("model") {
-        record["model"] = actual_model.clone();
-    }
-    state.storage.record_usage(record);
-    eprintln!("<- {model} [received] {request_id}");
-    Ok(Json(converted).into_response())
+    .await;
+    result.map_err(|error: AppError| {
+        error.with_context(json!({
+        "upstreamRequestShape":request_shape, "upstreamResponse":metadata,
+        "requestElapsedMs":started.elapsed().as_millis(), "elapsedMs":started.elapsed().as_millis(),
+        "headersMs":headers_ms, "upstreamAttempted":true, "transfer":transfer
+    }))
+    })
 }
 
 fn error_response(
@@ -243,25 +260,18 @@ fn error_record_value(
     error: &AppError,
 ) -> Value {
     let mut details = json!({
-        "message": error.message,
+        "message": if error.details.as_ref().and_then(|d| d["phase"].as_str()) == Some("upstream_http") { format!("Upstream returned HTTP {} (body omitted)", error.status.as_u16()) } else { safe_text(&error.message) },
         "status": error.status.as_u16(),
         "type": error.error_type(),
     });
     let mut request_shape = None;
-    if let Some(response) = &error.details {
-        for field in ["phase", "direction"] {
-            if let Some(value) = response.get(field) {
+    if let Some(response) = error.details.as_ref().and_then(Value::as_object) {
+        for (field, value) in response {
+            if field == "upstreamRequestShape" {
+                request_shape = Some(value.clone());
+            } else {
                 details[field] = value.clone();
             }
-        }
-        if let Some(shape) = response.get("upstreamRequestShape") {
-            request_shape = Some(shape.clone());
-            details["response"] = response["response"].clone();
-            if let Some(truncated) = response.get("responseTruncated") {
-                details["responseTruncated"] = truncated.clone();
-            }
-        } else {
-            details["response"] = response.clone();
         }
     }
     let mut record = json!({

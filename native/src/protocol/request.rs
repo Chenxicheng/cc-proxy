@@ -453,7 +453,7 @@ pub fn convert_request_with_mode(
     }
 
     let mut ids = IdContext::default();
-    let preserve_reasoning = is_glm(model) || is_qwen(model);
+    let preserve_reasoning = is_glm(model);
     for (message_index, message) in source_messages.iter().enumerate() {
         messages.extend(convert_message(
             message,
@@ -470,16 +470,7 @@ pub fn convert_request_with_mode(
     let mut output = Map::new();
     output.insert("model".into(), Value::String(model.to_owned()));
     output.insert("messages".into(), Value::Array(messages));
-    let client_streaming = request.get("stream").and_then(Value::as_bool) == Some(true);
-    let qwen_thinking = is_qwen(model)
-        && matches!(
-            request
-                .get("thinking")
-                .and_then(|thinking| thinking.get("type"))
-                .and_then(Value::as_str),
-            Some("enabled" | "adaptive")
-        );
-    let upstream_streaming = client_streaming || qwen_thinking;
+    let upstream_streaming = request.get("stream").and_then(Value::as_bool) == Some(true);
     output.insert("stream".into(), Value::Bool(upstream_streaming));
     output.insert(
         max_tokens_field.as_str().into(),
@@ -964,7 +955,7 @@ fn apply_model_options(
         .and_then(|config| config.get("effort"))
         .and_then(Value::as_str);
 
-    if thinking_type == Some("disabled") && effort.is_some() && !is_qwen(model) {
+    if thinking_type == Some("disabled") && effort.is_some() {
         return Err(AppError::bad_request(
             "output_config.effort: conflicts with thinking.disabled",
         ));
@@ -1005,16 +996,6 @@ fn apply_model_options(
             && let Some(value) = glm53_effort(effort)
         {
             output.insert("reasoning_effort".into(), Value::String(value.into()));
-        }
-        return Ok(());
-    }
-    if is_qwen(model) {
-        if let Some(enabled) = match thinking_type {
-            Some("enabled" | "adaptive") => Some(true),
-            Some("disabled") => Some(false),
-            _ => None,
-        } {
-            output.insert("enable_thinking".into(), Value::Bool(enabled));
         }
         return Ok(());
     }
@@ -1091,9 +1072,6 @@ fn is_glm52(model: &str) -> bool {
 }
 fn is_glm53(model: &str) -> bool {
     model_name(model).starts_with("glm-5.3")
-}
-fn is_qwen(model: &str) -> bool {
-    model_name(model).starts_with("qwen")
 }
 #[cfg(test)]
 #[path = "../../tests/unit/protocol/request.rs"]

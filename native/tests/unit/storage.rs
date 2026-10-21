@@ -67,7 +67,10 @@ async fn flushes_queued_records_on_shutdown() {
     .await
     .unwrap();
     assert_eq!(usage, "{\"value\":1}\n");
-    assert_eq!(errors, "{\"message\":\"failed\"}\n");
+    let error: Value = serde_json::from_str(errors.trim()).unwrap();
+    assert_eq!(error["message"], "failed");
+    assert_eq!(error["diagnosticsVersion"], 1);
+    assert!(error["build"]["packageVersion"].is_string());
 }
 
 #[tokio::test]
@@ -112,6 +115,9 @@ fn counts_records_when_queue_is_closed() {
     let storage = Storage {
         sender,
         dropped: Arc::new(AtomicU64::new(0)),
+        health: Arc::new(LogHealth::default()),
+        base_dir: Arc::new(PathBuf::new()),
+        secrets: Arc::new(Vec::new()),
     };
     storage.record_usage(json!({"value": 1}));
     assert_eq!(storage.dropped_count(), 1);
@@ -123,6 +129,9 @@ fn drops_without_blocking_when_queue_is_full() {
     let storage = Storage {
         sender,
         dropped: Arc::new(AtomicU64::new(0)),
+        health: Arc::new(LogHealth::default()),
+        base_dir: Arc::new(PathBuf::new()),
+        secrets: Arc::new(Vec::new()),
     };
     storage.record_usage(json!({"value": 1}));
     storage.record_usage(json!({"value": 2}));
@@ -142,6 +151,7 @@ async fn rotates_daily_files_in_writer_loop() {
             let mut dates = dates;
             move || dates.pop_front().unwrap()
         },
+        Arc::new(LogHealth::default()),
     ));
     sender
         .send(WriteRecord {
@@ -180,7 +190,72 @@ async fn survives_jsonl_open_failure() {
     let blocked_path = directory.path().join("not-a-directory");
     tokio::fs::write(&blocked_path, b"file").await.unwrap();
     let (storage, handle) = Storage::start(blocked_path);
+    let health = storage.health.clone();
     storage.record_usage(json!({"value": 1}));
     drop(storage);
     handle.await.unwrap();
+    assert_eq!(health.io_failures.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        health.last_failure.lock().unwrap().as_ref().unwrap()["operation"],
+        "open"
+    );
+}
+
+#[tokio::test]
+async fn error_logs_remove_credentials_urls_and_bound_free_text() {
+    let directory = tempdir().unwrap();
+    let (storage, writer) = Storage::start(directory.path().to_path_buf());
+    let long_secret = "private-header-".repeat(80);
+    let response: reqwest::Response = axum::http::Response::builder()
+        .header("x-request-id", long_secret.as_str())
+        .body(String::new())
+        .unwrap()
+        .into();
+    let storage = storage.with_redactions(vec!["customer-api-key".into(), long_secret]);
+    storage.record_error(json!({
+        "provider":"https://user:password@provider.test/private-route?token=customer-api-key",
+        "error":{"message":"body failed customer-api-key https://secret.test/path?token=hidden",
+            "upstreamResponse":crate::error::response_metadata(&response),
+            "diagnostic":{"quoted":"invalid value \"private-prompt\"", "long":"界".repeat(1000)}}
+    }));
+    storage.record_error(json!({"provider":"https://customer-api-key.provider.test", "error":{}}));
+    drop(storage);
+    writer.await.unwrap();
+    let text = std::fs::read_to_string(
+        directory
+            .path()
+            .join("error_logs")
+            .join(format!("{}.jsonl", today())),
+    )
+    .unwrap();
+    for secret in [
+        "customer-api-key",
+        "private-prompt",
+        "password",
+        "private-route",
+        "secret.test",
+        "token=",
+        "private-header-",
+    ] {
+        assert!(!text.contains(secret), "leaked {secret}");
+    }
+    let records: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let value = &records[0];
+    assert_eq!(value["provider"], "https://provider.test");
+    assert_eq!(
+        value["error"]["upstreamResponse"]["xRequestId"],
+        "<redacted>"
+    );
+    assert!(records[1]["provider"].is_null());
+    assert_eq!(
+        value["error"]["diagnostic"]["long"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        512
+    );
 }

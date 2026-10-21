@@ -131,7 +131,7 @@ async fn invalid_upstream_json_returns_bad_gateway() {
 }
 
 #[tokio::test]
-async fn qwen_nonstreaming_request_uses_streamed_upstream_and_returns_json() {
+async fn qwen_nonstreaming_request_uses_generic_json_upstream() {
     use std::sync::{Arc, Mutex};
 
     use axum::{Router, routing::post};
@@ -150,19 +150,11 @@ async fn qwen_nonstreaming_request_uses_streamed_upstream_and_returns_json() {
                     async move {
                         let fail = request["model"] == "qwen3-error";
                         observed.lock().unwrap().push(request);
-                        (
-                            [(header::CONTENT_TYPE, "text/event-stream")],
-                            if fail {
-                                "data: {\"error\":{\"message\":\"provider failed\"}}\n\n".to_owned()
-                            } else {
-                                concat!(
-                                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}\n\n",
-                                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"id\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
-                                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n",
-                                "data: [DONE]\n\n"
-                                ).to_owned()
-                            },
-                        )
+                        Json(if fail {
+                            json!({"error":{"message":"provider failed"}})
+                        } else {
+                            json!({"choices":[{"message":{"role":"assistant", "content":null, "reasoning_content":"think", "tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":3}})
+                        })
                     }
                 }),
             ),
@@ -212,12 +204,10 @@ async fn qwen_nonstreaming_request_uses_streamed_upstream_and_returns_json() {
     {
         let requests = observed.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["stream"], true);
-        assert_eq!(
-            requests[0]["stream_options"],
-            json!({"include_usage": true})
-        );
-        assert_eq!(requests[0]["enable_thinking"], true);
+        assert_eq!(requests[0]["stream"], false);
+        assert!(requests[0].get("stream_options").is_none());
+        assert!(requests[0].get("enable_thinking").is_none());
+        assert_eq!(requests[0]["reasoning_effort"], "high");
     }
 
     let mut failed_body = body;

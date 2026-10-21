@@ -131,15 +131,8 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
 }
 
 #[test]
-fn preserves_reasoning_only_for_glm_and_qwen_tool_history() {
-    for model in [
-        "glm-5.2",
-        "GLM-4",
-        "vendor/GlM-4",
-        "qwen3-coder",
-        "QWEN2",
-        "vendor/QwEn2",
-    ] {
+fn preserves_reasoning_only_for_glm_tool_history() {
+    for model in ["glm-5.2", "GLM-4", "vendor/GlM-4"] {
         let body = json!({
             "model": model, "max_tokens": 10,
             "messages": [
@@ -157,7 +150,7 @@ fn preserves_reasoning_only_for_glm_and_qwen_tool_history() {
     }
 
     let generic = json!({
-        "model": "gpt-4", "max_tokens": 10,
+        "model": "vendor/QwEn3.8", "max_tokens": 10,
         "messages": [
             {"role": "assistant", "content": [
                 {"type": "thinking", "thinking": "private", "signature": "sig"},
@@ -526,7 +519,7 @@ fn generic_thinking_maps_without_model_name_guessing() {
 }
 
 #[test]
-fn glm_maps_effort_and_qwen_ignores_it() {
+fn glm_and_generic_effort_mapping() {
     let mut body = json!({
         "model": "glm-5.2", "max_tokens": 100,
         "messages": [{"role": "user", "content": "hello"}],
@@ -556,25 +549,15 @@ fn glm_maps_effort_and_qwen_ignores_it() {
         StatusCode::BAD_REQUEST
     );
     body["model"] = json!("qwen3.6-35b-a3b");
-    assert!(
-        convert_request(&body, "unused")
-            .unwrap()
-            .get("reasoning_effort")
-            .is_none()
-    );
-
-    body["model"] = json!("vendor/QWEN3.8-27b");
-    body["output_config"]["effort"] = json!("max");
-    assert!(
-        convert_request(&body, "unused")
-            .unwrap()
-            .get("reasoning_effort")
-            .is_none()
+    assert_eq!(
+        convert_request(&body, "unused").unwrap()["reasoning_effort"],
+        "max"
     );
     body["thinking"] = json!({"type": "disabled"});
-    let qwen = convert_request(&body, "unused").unwrap();
-    assert_eq!(qwen["enable_thinking"], false);
-    assert!(qwen.get("reasoning_effort").is_none());
+    assert_eq!(
+        convert_request(&body, "unused").unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
 }
 
 #[test]
@@ -633,62 +616,30 @@ fn tool_results_must_complete_the_immediately_following_round() {
 }
 
 #[test]
-fn recognizes_plain_and_namespaced_qwen3_models() {
-    for model in [
-        "qwen3.6-35b-a3b",
-        "qwen/qwen3.6-35b-a3b",
-        "QWEN3.6-35b-a3b",
-        "vendor/QwEn3.6-35b-a3b",
-    ] {
-        let body = json!({
-            "model": model,
-            "max_tokens": 10,
-            "stream": true,
-            "thinking": {"type": "enabled"},
-            "messages": [{"role": "user", "content": "hello"}]
-        });
-        let converted = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
-        assert_eq!(converted["enable_thinking"], true, "{model}");
+fn qwen_matches_generic_request_conversion() {
+    for model in ["qwen3.8", "QWEN2", "vendor/QwEn3.8", "qwen/qwen3.6-35b-a3b"] {
+        for streaming in [false, true] {
+            for thinking in [
+                Value::Null,
+                json!({"type":"enabled"}),
+                json!({"type":"adaptive"}),
+                json!({"type":"disabled"}),
+            ] {
+                let mut body = json!({
+                    "model": model, "max_tokens": 10, "stream": streaming,
+                    "messages": [{"role":"user", "content":"hello"}]
+                });
+                if !thinking.is_null() {
+                    body["thinking"] = thinking;
+                }
+                let actual = convert_request(&body, "unused").unwrap();
+                body["model"] = json!("generic-model");
+                let mut expected = convert_request(&body, "unused").unwrap();
+                expected["model"] = json!(model);
+                assert_eq!(actual, expected);
+                assert_eq!(actual["stream"], streaming);
+                assert!(actual.get("enable_thinking").is_none());
+            }
+        }
     }
-
-    let unrelated = json!({
-        "model": "vendor/not-qwen3",
-        "max_tokens": 10,
-        "stream": true,
-        "thinking": {"type": "enabled"},
-        "messages": [{"role": "user", "content": "hello"}]
-    });
-    let converted = convert_request(&unrelated, "http://127.0.0.1:1234/v1").unwrap();
-    assert!(converted.get("enable_thinking").is_none());
-}
-
-#[test]
-fn qwen_thinking_uses_upstream_stream_without_changing_other_requests() {
-    let mut body = json!({
-        "model": "qwen/qwen3.6-35b-a3b",
-        "max_tokens": 10,
-        "stream": false,
-        "thinking": {"type": "enabled"},
-        "messages": [{"role": "user", "content": "hello"}]
-    });
-    let enabled = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
-    assert_eq!(enabled["stream"], true);
-    assert_eq!(enabled["stream_options"], json!({"include_usage": true}));
-    assert_eq!(enabled["enable_thinking"], true);
-
-    body["thinking"]["type"] = json!("disabled");
-    let disabled = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
-    assert_eq!(disabled["stream"], false);
-    assert!(disabled.get("stream_options").is_none());
-    assert_eq!(disabled["enable_thinking"], false);
-
-    body.as_object_mut().unwrap().remove("thinking");
-    let absent = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
-    assert_eq!(absent["stream"], false);
-    assert!(absent.get("enable_thinking").is_none());
-
-    body["model"] = json!("gpt-4o");
-    body["thinking"] = json!({"type": "enabled"});
-    let other = convert_request(&body, "http://127.0.0.1:1234/v1").unwrap();
-    assert_eq!(other["stream"], false);
 }

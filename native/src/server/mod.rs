@@ -43,7 +43,16 @@ pub(super) async fn run() -> Result<(), String> {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
+    let mut secrets = vec![config.resolve_api_key()?];
+    if let Some(headers) = &config.upstream_headers {
+        secrets.extend(headers.values().cloned());
+    }
     let (storage, writer_handle) = Storage::start(base_dir);
+    let storage = storage.with_redactions(secrets);
+    eprintln!(
+        "[adapter] Error logs: {} (UTC dates); /health reports logging failures",
+        storage.health()["errorDirectory"]
+    );
     let state = AppState {
         config,
         client,

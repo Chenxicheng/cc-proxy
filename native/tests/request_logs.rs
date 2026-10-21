@@ -208,6 +208,10 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
         })
         .collect();
     assert_eq!(errors.len(), failures.len());
+    let serialized = serde_json::to_string(&errors).unwrap();
+    assert!(!serialized.contains("private-upstream-body"));
+    assert!(!serialized.contains("private-stream-message"));
+    assert!(!serialized.contains(&"x".repeat(1024)));
     for (model, phase) in [
         ("stream-error", "upstream_sse_error"),
         ("stream-invalid-json", "sse_json"),
@@ -226,7 +230,7 @@ async fn records_request_rejections_upstream_errors_and_stream_terminal_outcomes
         .unwrap();
     assert_eq!(large["error"]["responseTruncated"], true);
     assert_eq!(
-        large["error"]["response"].as_str().unwrap().len(),
+        large["error"]["response"]["bodyBytes"].as_u64().unwrap() as usize,
         64 * 1024
     );
     for id in failures {

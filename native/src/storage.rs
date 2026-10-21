@@ -1,14 +1,15 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
+use crate::error::safe_text;
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncWriteExt, BufWriter},
@@ -31,25 +32,108 @@ struct WriteRecord {
     line: Vec<u8>,
 }
 
+#[derive(Default)]
+struct LogHealth {
+    io_failures: AtomicU64,
+    last_failure: Mutex<Option<Value>>,
+}
+
+impl LogHealth {
+    fn failure(&self, operation: &str, error: std::io::Error, base_dir: &Path) {
+        self.io_failures.fetch_add(1, Ordering::Relaxed);
+        *self.last_failure.lock().expect("log health lock") = Some(json!({
+            "operation":operation, "kind":format!("{:?}", error.kind()),
+            "timestamp":Utc::now().to_rfc3339(),
+        }));
+        eprintln!(
+            "[adapter] Failed to persist logs ({operation}, {:?}); check permissions and free disk space at {:?}",
+            error.kind(),
+            base_dir
+        );
+    }
+}
+
 #[derive(Clone)]
 pub struct Storage {
     sender: mpsc::Sender<WriteRecord>,
     dropped: Arc<AtomicU64>,
+    health: Arc<LogHealth>,
+    base_dir: Arc<PathBuf>,
+    secrets: Arc<Vec<String>>,
 }
 
 impl Storage {
     pub fn start(base_dir: PathBuf) -> (Self, JoinHandle<()>) {
+        let base_dir = if base_dir.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&base_dir))
+                .unwrap_or(base_dir)
+        } else {
+            base_dir
+        };
         let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
-        let handle = tokio::spawn(writer_loop(base_dir, receiver));
-        (Self { sender, dropped }, handle)
+        let health = Arc::new(LogHealth::default());
+        let base_dir = Arc::new(base_dir);
+        let handle = tokio::spawn(writer_loop(
+            base_dir.as_ref().clone(),
+            receiver,
+            health.clone(),
+        ));
+        (
+            Self {
+                sender,
+                dropped,
+                health,
+                base_dir,
+                secrets: Arc::new(Vec::new()),
+            },
+            handle,
+        )
+    }
+
+    pub fn with_redactions(mut self, secrets: Vec<String>) -> Self {
+        let mut secrets: Vec<_> = secrets.into_iter().filter(|v| !v.is_empty()).collect();
+        secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        secrets.dedup();
+        self.secrets = Arc::new(secrets);
+        self
+    }
+
+    pub fn health(&self) -> Value {
+        json!({"ioFailureCount":self.health.io_failures.load(Ordering::Relaxed),
+            "lastIoFailure":*self.health.last_failure.lock().expect("log health lock"),
+            "droppedRecords":self.dropped_count(),
+            "errorDirectory":self.base_dir.join("error_logs"),
+            "dateTimezone":"UTC"})
     }
 
     pub fn record_usage(&self, record: Value) {
         self.enqueue(RecordKind::Usage, record);
     }
 
-    pub fn record_error(&self, record: Value) {
+    pub fn record_error(&self, mut record: Value) {
+        record["diagnosticsVersion"] = json!(1);
+        record["build"] = build_info().clone();
+        record["logging"] = json!({"ioFailureCount":self.health.io_failures.load(Ordering::Relaxed), "droppedRecords":self.dropped_count()});
+        if let Some(provider) = record.get_mut("provider") {
+            *provider = provider
+                .as_str()
+                .and_then(|v| url::Url::parse(v).ok())
+                .map(|url| json!(url.origin().ascii_serialization()))
+                .filter(|origin| {
+                    !self
+                        .secrets
+                        .iter()
+                        .any(|secret| origin.as_str().is_some_and(|value| value.contains(secret)))
+                })
+                .unwrap_or(Value::Null);
+        }
+        let provider = record.get("provider").cloned();
+        sanitize_record(&mut record, &self.secrets, 0);
+        if let Some(provider) = provider {
+            record["provider"] = provider;
+        }
         eprintln!("{}", error_summary(&record));
         self.enqueue(RecordKind::Error, record);
     }
@@ -58,7 +142,20 @@ impl Storage {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    fn enqueue(&self, kind: RecordKind, record: Value) {
+    fn enqueue(&self, kind: RecordKind, mut record: Value) {
+        if let Some(provider) = record.get_mut("provider") {
+            *provider = provider
+                .as_str()
+                .and_then(|v| url::Url::parse(v).ok())
+                .map(|url| json!(url.origin().ascii_serialization()))
+                .filter(|origin| {
+                    !self
+                        .secrets
+                        .iter()
+                        .any(|secret| origin.as_str().is_some_and(|value| value.contains(secret)))
+                })
+                .unwrap_or(Value::Null);
+        }
         let mut line = match serde_json::to_vec(&record) {
             Ok(line) => line,
             Err(error) => {
@@ -148,14 +245,19 @@ fn today() -> String {
     Utc::now().format("%Y-%m-%d").to_string()
 }
 
-async fn writer_loop(base_dir: PathBuf, receiver: mpsc::Receiver<WriteRecord>) {
-    writer_loop_with_date(base_dir, receiver, today).await;
+async fn writer_loop(
+    base_dir: PathBuf,
+    receiver: mpsc::Receiver<WriteRecord>,
+    health: Arc<LogHealth>,
+) {
+    writer_loop_with_date(base_dir, receiver, today, health).await;
 }
 
 async fn writer_loop_with_date<F>(
     base_dir: PathBuf,
     mut receiver: mpsc::Receiver<WriteRecord>,
     mut current_date: F,
+    health: Arc<LogHealth>,
 ) where
     F: FnMut() -> String,
 {
@@ -169,43 +271,86 @@ async fn writer_loop_with_date<F>(
                 let Some(record) = record else { break };
                 let date = current_date();
                 if writer.as_ref().is_none_or(|current| current.date != date) {
-                    if let Some(current) = writer.as_mut() {
-                        log_io_error("flush JSONL files during rotation", current.flush().await);
+                    if let Some(current) = writer.as_mut()
+                        && let Err(error) = current.flush().await {
+                        health.failure("rotate_flush", error, &base_dir);
                     }
                     writer = match DailyWriter::open(&base_dir, date).await {
                         Ok(next) => Some(next),
                         Err(error) => {
-                            eprintln!("[adapter] Failed to open JSONL files: {error}");
+                            health.failure("open", error, &base_dir);
                             None
                         }
                     };
                 }
                 if let Some(current) = writer.as_mut() {
                     if let Err(error) = current.write(record).await {
-                        eprintln!("[adapter] Failed to write JSONL record: {error}");
-                    } else if current.buffered >= FLUSH_BYTES {
-                        log_io_error("flush JSONL files", current.flush().await);
+                        health.failure("write", error, &base_dir);
+                    } else if current.buffered >= FLUSH_BYTES
+                        && let Err(error) = current.flush().await {
+                        health.failure("flush", error, &base_dir);
                     }
                 }
             }
             _ = interval.tick() => {
                 if let Some(current) = writer.as_mut()
                     && current.buffered > 0
+                    && let Err(error) = current.flush().await
                 {
-                    log_io_error("flush JSONL files", current.flush().await);
+                    health.failure("flush", error, &base_dir);
                 }
             }
         }
     }
 
-    if let Some(current) = writer.as_mut() {
-        log_io_error("flush JSONL files at shutdown", current.flush().await);
+    if let Some(current) = writer.as_mut()
+        && let Err(error) = current.flush().await
+    {
+        health.failure("shutdown_flush", error, &base_dir);
     }
 }
 
-fn log_io_error(operation: &str, result: std::io::Result<()>) {
-    if let Err(error) = result {
-        eprintln!("[adapter] Failed to {operation}: {error}");
+fn build_info() -> &'static Value {
+    static INFO: OnceLock<Value> = OnceLock::new();
+    INFO.get_or_init(|| {
+        let package: Value =
+            serde_json::from_str(include_str!("../../package.json")).expect("package metadata");
+        json!({"packageVersion":package["version"], "nativeVersion":env!("CARGO_PKG_VERSION"),
+            "revision":option_env!("CC_PROXY_BUILD_SHA").unwrap_or("unknown-local-build"),
+            "os":std::env::consts::OS, "arch":std::env::consts::ARCH})
+    })
+}
+
+fn sanitize_record(value: &mut Value, secrets: &[String], depth: usize) {
+    if depth > 12 {
+        *value = json!("<omitted>");
+        return;
+    }
+    match value {
+        Value::String(text) => {
+            for secret in secrets {
+                *text = text.replace(secret, "<redacted>");
+            }
+            *text = safe_text(text);
+        }
+        Value::Array(items) => {
+            items.truncate(128);
+            for item in items {
+                sanitize_record(item, secrets, depth + 1);
+            }
+        }
+        Value::Object(fields) => {
+            let original = std::mem::take(fields);
+            for (mut key, mut item) in original.into_iter().take(128) {
+                for secret in secrets {
+                    key = key.replace(secret, "<redacted>");
+                }
+                key = safe_text(&key);
+                sanitize_record(&mut item, secrets, depth + 1);
+                fields.insert(key, item);
+            }
+        }
+        _ => {}
     }
 }
 

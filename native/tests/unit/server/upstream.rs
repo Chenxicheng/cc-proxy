@@ -31,6 +31,13 @@ async fn nonstream_body_idle_timeout_is_a_gateway_timeout() {
         .unwrap_err();
     assert_eq!(error.status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(error.message, "Upstream response body stalled");
+    assert_eq!(error.details.as_ref().unwrap()["phase"], "body_idle");
+    assert!(
+        error.details.as_ref().unwrap()["transfer"]["receivedBytes"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     let response = client.get(&url).send().await.unwrap();
     let error = read_upstream_body(response, Instant::now() + Duration::from_secs(2))
         .await
@@ -39,6 +46,10 @@ async fn nonstream_body_idle_timeout_is_a_gateway_timeout() {
     assert_eq!(
         error.message,
         "Upstream response exceeded the total deadline"
+    );
+    assert_eq!(
+        error.details.as_ref().unwrap()["phase"],
+        "response_total_timeout"
     );
     server.abort();
 }
@@ -225,8 +236,8 @@ fn plain_upstream_error_keeps_status_and_sanitized_request_shape() {
     assert_eq!(error.status, StatusCode::NOT_ACCEPTABLE);
     assert_eq!(error.message, "Not Acceptable");
     assert_eq!(
-        error.details.as_ref().unwrap()["response"],
-        "Not Acceptable"
+        error.details.as_ref().unwrap()["response"]["bodyOmitted"],
+        true
     );
     assert_eq!(
         error.details.as_ref().unwrap()["upstreamRequestShape"],

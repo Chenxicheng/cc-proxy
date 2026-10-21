@@ -9,11 +9,12 @@
 - Strict JSON schema output is forwarded only when its root shape can pass Chat strict mode without rewriting the schema. Non-streaming upstream responses have bounded time and size.
 - JSON and SSE responses reject undeclared tools, audio, non-empty annotations, malformed tool arguments, and unsupported finish reasons instead of silently dropping them.
 - Streamed reasoning is preserved even when it follows a tool call; later argument fragments remain attached to the original tool block.
-- Qwen3 thinking requests from non-streaming clients use a streaming upstream call and return one complete Messages JSON response after validation; Claude Code needs no special streaming setting.
-- Qwen requests ignore explicit effort and do not send `reasoning_effort`; GLM-5.2 maps effort to `high`/`max`, while GLM-5.3 maps it to `low`/`high`/`max`. Other GLM models reject unsupported explicit effort. Family matching is case-insensitive and uses the model-name prefix without assuming a generation number.
+- Qwen uses the generic Chat conversion: preserve the client's streaming mode, map thinking/effort to `reasoning_effort`, and omit `enable_thinking` and historical reasoning. No Qwen-specific fallback is applied.
+- GLM-5.2 maps effort to `high`/`max`, while GLM-5.3 maps it to `low`/`high`/`max`. Other GLM models reject unsupported explicit effort. GLM family matching is case-insensitive and uses the model-name prefix.
 - Responses include both `request-id` and `x-request-id`. Upstream error bodies are capped at 64 KiB, and valid `Retry-After` values are forwarded without automatic request retries.
 - Stream failures log a diagnostic phase and elapsed time in `error_logs/*.jsonl`; the terminal adds those safe fields to its request summary for correlation.
 - Conversion failures log the direction, validation message and fixed-path JSON field types; SSE diagnostics also identify the chunk and conversion state without copying content or tool argument values.
+- Customer diagnostics cover streaming and non-streaming transport failures, safe request controls, upstream request IDs, byte/timing counters and package/build/platform identity. Startup prints the actual error-log directory; `/health` reports queue drops and file I/O failures. Upstream error bodies are omitted from JSONL. See [diagnostic fields and collection guidance](docs/API.md#customer-diagnostics).
 - Prompt usage is split into uncached input, cache reads, and cache writes when the upstream counters are complete. Missing or invalid usage never discards an otherwise valid answer; degraded values are explicitly classified in usage JSONL and are not suitable for exact billing.
 
 See [docs/API.md](docs/API.md) for the complete request, response, streaming, and degradation rules.

@@ -1,4 +1,5 @@
 use super::*;
+use std::error::Error;
 
 #[test]
 fn streamed_message_id_is_unique_per_request() {
@@ -35,7 +36,7 @@ fn stream_error_record_contains_safe_upstream_metadata() {
 use std::{io, time::Duration};
 
 #[tokio::test]
-async fn conversion_failures_record_field_types_without_content_in_both_paths() {
+async fn conversion_failures_record_field_types_without_content() {
     let data = json!({"choices":[{"delta":{"content":{"private":"secret-marker"}}}]});
     let mut stream_state = state(&[]);
     let (phase, message) = stream_state.process_data(&data.to_string()).unwrap_err();
@@ -49,20 +50,6 @@ async fn conversion_failures_record_field_types_without_content_in_both_paths() 
         "object"
     );
     assert!(!record.to_string().contains("secret-marker"));
-
-    let chunks =
-        futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(format!("data: {data}\n\n")))]);
-    let error = collect_bytes_with_timeouts(chunks, state(&[]), Instant::now(), STREAM_TIMEOUTS)
-        .await
-        .unwrap_err();
-    let details = error.details.unwrap();
-    assert_eq!(details["phase"], "protocol_conversion");
-    assert_eq!(details["chunkIndex"], 1);
-    assert_eq!(
-        details["diagnostic"]["fieldTypes"]["/choices/0/delta/content"],
-        "object"
-    );
-    assert!(!details.to_string().contains("secret-marker"));
 }
 
 #[test]
@@ -92,10 +79,10 @@ fn stream_diagnostics_distinguish_json_syntax_and_post_finish_content() {
 }
 
 #[tokio::test]
-async fn http_200_truncated_body_keeps_transport_cause_in_both_paths() {
+async fn http_200_truncated_body_keeps_transport_cause() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    for buffered in [false, true] {
+    {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
             "http://{}/?token=secret-marker",
@@ -121,32 +108,21 @@ async fn http_200_truncated_body_keeps_transport_cause_in_both_paths() {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let diagnostic = if buffered {
-            let error = collect_stream(
-                response,
-                "model".into(),
-                "provider".into(),
-                "request".into(),
-                Instant::now(),
-                vec![],
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(error.status, StatusCode::BAD_GATEWAY);
-            assert!(!error.message.contains("secret-marker"));
-            assert!(!error.message.contains("end of file"));
-            error.details.unwrap()
-        } else {
+        let diagnostic = {
             let directory = tempfile::tempdir().unwrap();
             let (storage, writer) = Storage::start(directory.path().to_path_buf());
             let body = transform_stream(
                 response,
-                "model".into(),
-                "provider".into(),
+                StreamRequest {
+                    model: "model".into(),
+                    provider: "provider".into(),
+                    request_id: "request".into(),
+                    tool_names: vec![],
+                    summary: json!({}),
+                    started: Instant::now(),
+                },
                 storage,
-                "request".into(),
                 Instant::now(),
-                vec![],
             );
             let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
             let text = String::from_utf8(bytes.to_vec()).unwrap();
@@ -276,68 +252,6 @@ where
     let result = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     writer.await.unwrap();
     String::from_utf8(result.to_vec()).unwrap()
-}
-
-#[tokio::test]
-async fn collects_qwen_thinking_tools_and_usage_as_one_message() {
-    let upstream = concat!(
-        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"id\\\":\"}}]},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
-        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n",
-        "data: [DONE]\n\n"
-    );
-    let chunks = futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(upstream))]);
-    let (message, usage) =
-        collect_bytes_with_timeouts(chunks, state(&["lookup"]), Instant::now(), STREAM_TIMEOUTS)
-            .await
-            .unwrap();
-    assert_eq!(
-        message["content"][0],
-        json!({"type":"thinking","thinking":"think"})
-    );
-    assert_eq!(
-        message["content"][1],
-        json!({"type":"text","text":"answer"})
-    );
-    assert_eq!(message["content"][2]["type"], "tool_use");
-    assert_eq!(message["content"][2]["input"], json!({"id":1}));
-    assert_eq!(message["stop_reason"], "tool_use");
-    assert_eq!(
-        message["usage"],
-        json!({"input_tokens":5,"output_tokens":3})
-    );
-    assert_eq!(usage["streaming"], false);
-    assert_eq!(usage["usage"]["completion_tokens"], 3);
-}
-
-#[tokio::test]
-async fn buffered_stream_rejects_error_and_truncation() {
-    for upstream in [
-        "data: {\"error\":{\"message\":\"provider failed\"}}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n",
-        "data: {broken\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"lookup\",\"arguments\":\"{\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
-    ] {
-        let chunks = futures_util::stream::iter([Ok::<_, io::Error>(Bytes::from(upstream))]);
-        let result = collect_bytes_with_timeouts(
-            chunks,
-            state(&["lookup"]),
-            Instant::now(),
-            STREAM_TIMEOUTS,
-        )
-        .await;
-        assert_eq!(result.unwrap_err().status, StatusCode::BAD_GATEWAY);
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn buffered_stream_times_out_before_returning_json() {
-    let upstream = futures_util::stream::pending::<Result<Bytes, io::Error>>();
-    let result =
-        collect_bytes_with_timeouts(upstream, state(&[]), Instant::now(), timeouts(1, 2, 3)).await;
-    assert_eq!(result.unwrap_err().status, StatusCode::GATEWAY_TIMEOUT);
 }
 
 #[test]
