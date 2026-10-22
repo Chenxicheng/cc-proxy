@@ -131,8 +131,14 @@ fn enforces_assistant_prefill_capability_and_maps_tool_controls() {
 }
 
 #[test]
-fn preserves_reasoning_only_for_glm_tool_history() {
-    for model in ["glm-5.2", "GLM-4", "vendor/GlM-4"] {
+fn preserves_reasoning_for_glm_and_qwen_tool_history() {
+    for model in [
+        "glm-5.2",
+        "GLM-4",
+        "vendor/GlM-4",
+        "vendor/QwEn2",
+        "qwen3.8",
+    ] {
         let body = json!({
             "model": model, "max_tokens": 10,
             "messages": [
@@ -150,7 +156,7 @@ fn preserves_reasoning_only_for_glm_tool_history() {
     }
 
     let generic = json!({
-        "model": "vendor/QwEn3.8", "max_tokens": 10,
+        "model": "vendor/custom", "max_tokens": 10,
         "messages": [
             {"role": "assistant", "content": [
                 {"type": "thinking", "thinking": "private", "signature": "sig"},
@@ -548,7 +554,7 @@ fn glm_and_generic_effort_mapping() {
         convert_request(&body, "unused").unwrap_err().status,
         StatusCode::BAD_REQUEST
     );
-    body["model"] = json!("qwen3.6-35b-a3b");
+    body["model"] = json!("custom-model");
     assert_eq!(
         convert_request(&body, "unused").unwrap()["reasoning_effort"],
         "max"
@@ -616,30 +622,135 @@ fn tool_results_must_complete_the_immediately_following_round() {
 }
 
 #[test]
-fn qwen_matches_generic_request_conversion() {
-    for model in ["qwen3.8", "QWEN2", "vendor/QwEn3.8", "qwen/qwen3.6-35b-a3b"] {
+fn qwen_thinking_uses_explicit_switch_without_effort_in_both_modes() {
+    for model in [
+        "qwen",
+        "qwen3.8",
+        "QWEN2",
+        " vendor/QwEn3.8 ",
+        "qwen/qwen3.6-35b-a3b",
+    ] {
         for streaming in [false, true] {
-            for thinking in [
-                Value::Null,
-                json!({"type":"enabled"}),
-                json!({"type":"adaptive"}),
-                json!({"type":"disabled"}),
+            for (thinking, enabled) in [
+                (Value::Null, None),
+                (
+                    json!({"type":"enabled", "budget_tokens": 32000}),
+                    Some(true),
+                ),
+                (json!({"type":"adaptive"}), Some(true)),
+                (json!({"type":"disabled"}), Some(false)),
             ] {
-                let mut body = json!({
-                    "model": model, "max_tokens": 10, "stream": streaming,
-                    "messages": [{"role":"user", "content":"hello"}]
-                });
-                if !thinking.is_null() {
-                    body["thinking"] = thinking;
+                for effort in [
+                    None,
+                    Some("low"),
+                    Some("medium"),
+                    Some("high"),
+                    Some("xhigh"),
+                    Some("max"),
+                ] {
+                    for token_field in [
+                        MaxTokensField::MaxTokens,
+                        MaxTokensField::MaxCompletionTokens,
+                    ] {
+                        let mut body = json!({
+                            "model": model, "max_tokens": 10, "stream": streaming,
+                            "messages": [{"role":"user", "content":"hello"}]
+                        });
+                        if !thinking.is_null() {
+                            body["thinking"] = thinking.clone();
+                        }
+                        if let Some(effort) = effort {
+                            body["output_config"] = json!({"effort": effort});
+                        }
+                        let actual = convert_request_with_mode(
+                            &body,
+                            AssistantPrefillMode::Unsupported,
+                            token_field,
+                        )
+                        .unwrap();
+                        assert_eq!(actual["model"], model);
+                        assert_eq!(actual["stream"], streaming);
+                        assert_eq!(actual["max_tokens"], 10);
+                        assert!(actual.get("max_completion_tokens").is_none());
+                        assert!(actual.get("reasoning_effort").is_none());
+                        assert!(actual.get("chat_template_kwargs").is_none());
+                        assert!(actual.get("thinking").is_none());
+                        assert_eq!(
+                            actual.get("enable_thinking").and_then(Value::as_bool),
+                            enabled
+                        );
+                        assert_eq!(actual.get("stream_options").is_some(), streaming);
+                        if streaming {
+                            assert_eq!(actual["stream_options"], json!({"include_usage": true}));
+                        }
+                    }
                 }
-                let actual = convert_request(&body, "unused").unwrap();
-                body["model"] = json!("generic-model");
-                let mut expected = convert_request(&body, "unused").unwrap();
-                expected["model"] = json!(model);
-                assert_eq!(actual, expected);
-                assert_eq!(actual["stream"], streaming);
-                assert!(actual.get("enable_thinking").is_none());
             }
         }
+    }
+}
+
+#[test]
+fn qwen_only_matches_the_final_model_prefix() {
+    for model in ["custom-qwen3", "vendor/not-qwen", "qwen/vendor-model"] {
+        let body = json!({"model": model, "max_tokens": 10,
+            "thinking": {"type": "adaptive"},
+            "messages": [{"role": "system", "content": "instruction"}, {"role": "user", "content": "hello"}]});
+        let actual = convert_request(&body, "unused").unwrap();
+        assert_eq!(actual["reasoning_effort"], "xhigh");
+        assert_eq!(actual["max_completion_tokens"], 10);
+        assert_eq!(actual["messages"][0]["role"], "system");
+        assert!(actual.get("enable_thinking").is_none());
+    }
+}
+
+#[test]
+fn qwen_relabels_system_history_without_dropping_short_text() {
+    let mut body = json!({"model": "Qwen2", "max_tokens": 10,
+    "system": [{"type": "text", "text": "base"}, {"type": "text", "text": "rules"}],
+    "messages": [
+        {"role": "system", "content": "{"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "OK"},
+        {"role": "system", "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]},
+        {"role": "user", "content": "continue"}
+    ]});
+    let actual = convert_request(&body, "unused").unwrap();
+    assert_eq!(
+        actual["messages"],
+        json!([
+            {"role": "system", "content": "base\nrules"},
+            {"role": "assistant", "content": "{"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "OK"},
+            {"role": "assistant", "content": "first\nsecond"},
+            {"role": "user", "content": "continue"}
+        ])
+    );
+    body.as_object_mut().unwrap().remove("system");
+    let actual = convert_request(&body, "unused").unwrap();
+    assert_eq!(
+        actual["messages"][0],
+        json!({"role": "assistant", "content": "{"})
+    );
+    body["messages"] =
+        json!([{ "role": "user", "content": "hello"}, {"role": "assistant", "content": "{"}]);
+    assert!(
+        convert_request(&body, "unused")
+            .unwrap_err()
+            .message
+            .contains("assistantPrefill")
+    );
+}
+
+#[test]
+fn qwen_still_validates_effort_types_and_values() {
+    for effort in [json!(42), json!(true), json!("none"), json!("xhight")] {
+        let body = json!({"model": "qwen3.8", "max_tokens": 10,
+            "thinking": {"type": "disabled"}, "output_config": {"effort": effort},
+            "messages": [{"role": "user", "content": "hello"}]});
+        let error = convert_request(&body, "unused").unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("output_config.effort"));
     }
 }

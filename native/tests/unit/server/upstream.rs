@@ -250,8 +250,9 @@ fn plain_upstream_error_keeps_status_and_sanitized_request_shape() {
         "stream": true,
         "enable_thinking": true
     }));
-    assert_eq!(namespaced_qwen["modelFamily"], "qwen3");
+    assert_eq!(namespaced_qwen["modelFamily"], "qwen");
     assert_eq!(namespaced_qwen["thinkingPresent"], true);
+    assert_eq!(namespaced_qwen["conversionPolicy"], "qwen");
     assert!(!namespaced_qwen.to_string().contains("secret"));
 
     let terminal_prefill = upstream_request_shape(&json!({
@@ -277,5 +278,27 @@ fn retry_after_accepts_seconds_and_http_date_only() {
     }
     for value in ["-1", "+1", "tomorrow", "Wed, 21 Oct 2015 07:28:00 PST"] {
         assert!(!valid_retry_after(&HeaderValue::from_str(value).unwrap()));
+    }
+}
+
+#[test]
+fn diagnostic_policy_matches_qwen_prefix_conversion() {
+    for (model, expected) in [
+        ("qwen", "qwen"),
+        ("QWEN2", "qwen"),
+        (" vendor/QwEn3.8 ", "qwen"),
+        ("custom-qwen3", "generic_chat"),
+        ("qwen/vendor-model", "generic_chat"),
+    ] {
+        let shape = upstream_request_shape(&json!({"model": model}));
+        assert_eq!(shape["conversionPolicy"], expected, "{model}");
+        assert_eq!(
+            shape["modelFamily"],
+            if expected == "qwen" {
+                "qwen"
+            } else {
+                "generic"
+            }
+        );
     }
 }

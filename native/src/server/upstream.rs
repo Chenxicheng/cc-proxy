@@ -11,6 +11,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 use crate::{
     config::AdapterConfig,
     error::{AppError, BodyProgress, error_chain, response_metadata},
+    protocol::is_qwen,
 };
 
 pub(super) const STREAM_RESPONSE_HEADERS_TIMEOUT: Duration = Duration::from_secs(120);
@@ -264,8 +265,8 @@ pub(super) fn upstream_request_shape(request: &Value) -> Value {
             let name = model.rsplit('/').next().unwrap_or(&model);
             if name.starts_with("glm-5") {
                 "glm-5"
-            } else if name.starts_with("qwen3") {
-                "qwen3"
+            } else if is_qwen(&model) {
+                "qwen"
             } else if name.starts_with("gpt-5")
                 || name
                     .strip_prefix('o')
@@ -319,7 +320,7 @@ pub(super) fn upstream_request_shape(request: &Value) -> Value {
         "reasoningEffort": request.get("reasoning_effort").and_then(Value::as_str),
         "enableThinking": request.get("enable_thinking").and_then(Value::as_bool),
         "thinkingType": request.pointer("/thinking/type").and_then(Value::as_str),
-        "conversionPolicy": if request["model"].as_str().is_some_and(|m| m.rsplit('/').next().unwrap_or(m).to_ascii_lowercase().starts_with("glm")) { "glm" } else { "generic_chat" },
+        "conversionPolicy": if request["model"].as_str().is_some_and(is_qwen) { "qwen" } else if request["model"].as_str().is_some_and(|m| m.rsplit('/').next().unwrap_or(m).to_ascii_lowercase().starts_with("glm")) { "glm" } else { "generic_chat" },
         "thinkingPresent": request.get("thinking").is_some()
             || request.get("enable_thinking").is_some()
             || request.get("reasoning_effort").is_some(),

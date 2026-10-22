@@ -435,6 +435,7 @@ pub fn convert_request_with_mode(
     }
     validate_tool_rounds(request["messages"].as_array().expect("validated messages"))?;
     let model = request["model"].as_str().expect("validated model");
+    let qwen = is_qwen(model);
     let source_messages = request["messages"].as_array().expect("validated messages");
     let terminal_assistant_prefill = source_messages.last().is_some_and(has_assistant_prefill);
     if terminal_assistant_prefill && assistant_prefill_mode == AssistantPrefillMode::Unsupported {
@@ -453,13 +454,14 @@ pub fn convert_request_with_mode(
     }
 
     let mut ids = IdContext::default();
-    let preserve_reasoning = is_glm(model);
+    let preserve_reasoning = is_glm(model) || qwen;
     for (message_index, message) in source_messages.iter().enumerate() {
         messages.extend(convert_message(
             message,
             message_index,
             &mut ids,
             preserve_reasoning,
+            qwen,
         )?);
     }
     if messages.is_empty() {
@@ -473,7 +475,12 @@ pub fn convert_request_with_mode(
     let upstream_streaming = request.get("stream").and_then(Value::as_bool) == Some(true);
     output.insert("stream".into(), Value::Bool(upstream_streaming));
     output.insert(
-        max_tokens_field.as_str().into(),
+        if qwen {
+            "max_tokens"
+        } else {
+            max_tokens_field.as_str()
+        }
+        .into(),
         request["max_tokens"].clone(),
     );
     if upstream_streaming {
@@ -625,11 +632,18 @@ fn convert_message(
     message_index: usize,
     ids: &mut IdContext,
     preserve_reasoning: bool,
+    qwen: bool,
 ) -> Result<Vec<Value>, AppError> {
     let role = message.get("role").and_then(Value::as_str).unwrap_or("");
     let Some(content) = message.get("content").filter(|content| !content.is_null()) else {
         return Ok(Vec::new());
     };
+    if qwen && role == "system" {
+        // Qwen's template rejects later system messages; retain TS assistant-history semantics.
+        return Ok(vec![
+            json!({"role": "assistant", "content": system_content(content)}),
+        ]);
+    }
     if let Some(content) = content.as_str() {
         return Ok(vec![json!({"role": role, "content": content})]);
     }
@@ -955,7 +969,7 @@ fn apply_model_options(
         .and_then(|config| config.get("effort"))
         .and_then(Value::as_str);
 
-    if thinking_type == Some("disabled") && effort.is_some() {
+    if thinking_type == Some("disabled") && effort.is_some() && !is_qwen(model) {
         return Err(AppError::bad_request(
             "output_config.effort: conflicts with thinking.disabled",
         ));
@@ -966,6 +980,12 @@ fn apply_model_options(
         ));
     }
 
+    if is_qwen(model) {
+        if let Some(kind) = thinking_type {
+            output.insert("enable_thinking".into(), Value::Bool(kind != "disabled"));
+        }
+        return Ok(());
+    }
     if is_glm(model) {
         if effort.is_some() && !is_glm52(model) && !is_glm53(model) {
             return Err(AppError::bad_request(
@@ -1066,6 +1086,9 @@ fn model_name(model: &str) -> String {
 }
 fn is_glm(model: &str) -> bool {
     model_name(model).starts_with("glm")
+}
+pub(crate) fn is_qwen(model: &str) -> bool {
+    model_name(model).starts_with("qwen")
 }
 fn is_glm52(model: &str) -> bool {
     model_name(model).starts_with("glm-5.2")

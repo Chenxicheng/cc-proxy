@@ -131,7 +131,7 @@ async fn invalid_upstream_json_returns_bad_gateway() {
 }
 
 #[tokio::test]
-async fn qwen_nonstreaming_request_uses_generic_json_upstream() {
+async fn qwen_nonstreaming_thinking_request_uses_json_upstream() {
     use std::sync::{Arc, Mutex};
 
     use axum::{Router, routing::post};
@@ -206,8 +206,10 @@ async fn qwen_nonstreaming_request_uses_generic_json_upstream() {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["stream"], false);
         assert!(requests[0].get("stream_options").is_none());
-        assert!(requests[0].get("enable_thinking").is_none());
-        assert_eq!(requests[0]["reasoning_effort"], "high");
+        assert_eq!(requests[0]["enable_thinking"], true);
+        assert!(requests[0].get("reasoning_effort").is_none());
+        assert_eq!(requests[0]["max_tokens"], 64);
+        assert!(requests[0].get("max_completion_tokens").is_none());
     }
 
     let mut failed_body = body;

@@ -62,8 +62,9 @@ async fn serve_upstream(listener: tokio::net::TcpListener) {
             }
             if model == "qwen3.8-27b" {
                 assert_eq!(request["stream"], false);
-                assert!(request.get("enable_thinking").is_none());
-                assert_eq!(request["reasoning_effort"], "low");
+                assert_eq!(request["enable_thinking"], true);
+                assert!(request.get("reasoning_effort").is_none());
+                assert_eq!(request["max_tokens"], 32);
             }
             let (payload, status) = match model {
                 "field-shape" => (
@@ -271,7 +272,14 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
         assert!(record["upstreamRequestShape"]["clientStream"].is_boolean());
         assert_eq!(
             record["upstreamRequestShape"]["conversionPolicy"],
-            "generic_chat"
+            if record["modelName"]
+                .as_str()
+                .is_some_and(|model| model.starts_with("qwen"))
+            {
+                "qwen"
+            } else {
+                "generic_chat"
+            }
         );
         assert!(!record.to_string().contains("diagnostic E2E fixture"));
         assert!(!record.to_string().contains("local-test-key"));
@@ -363,9 +371,12 @@ async fn diagnostics_are_preserved_through_the_native_http_process() {
     );
     assert_eq!(
         qwen_streaming["upstreamRequestShape"]["reasoningEffort"],
-        "low"
+        Value::Null
     );
-    assert!(qwen_streaming["upstreamRequestShape"]["enableThinking"].is_null());
+    assert_eq!(
+        qwen_streaming["upstreamRequestShape"]["enableThinking"],
+        true
+    );
 }
 
 fn assert_transport_chain_has_body_eof(chain: &[Value]) {

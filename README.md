@@ -5,11 +5,11 @@
 ## Conversion contract
 
 - `tools` and `stop_sequences` must use their documented array shapes. A named `tool_choice` must reference a declared tool, and tool results must complete the immediately preceding assistant tool-use round.
-- The Chat token-limit field defaults to `max_completion_tokens`; configure `upstreamCapabilities.maxTokensField: "max_tokens"` for endpoints that require the older field. Explicit thinking disablement sends `reasoning_effort: "none"` on the generic path, so an unsupported upstream reports its own error.
+- The Chat token-limit field defaults to `max_completion_tokens`; configure `upstreamCapabilities.maxTokensField: "max_tokens"` for endpoints that require the older field. Qwen always uses `max_tokens`. Explicit thinking disablement sends `reasoning_effort: "none"` on the generic path, so an unsupported upstream reports its own error.
 - Strict JSON schema output is forwarded only when its root shape can pass Chat strict mode without rewriting the schema. Non-streaming upstream responses have bounded time and size.
 - JSON and SSE responses reject undeclared tools, audio, non-empty annotations, malformed tool arguments, and unsupported finish reasons instead of silently dropping them.
 - Streamed reasoning is preserved even when it follows a tool call; later argument fragments remain attached to the original tool block.
-- Qwen uses the generic Chat conversion: preserve the client's streaming mode, map thinking/effort to `reasoning_effort`, and omit `enable_thinking` and historical reasoning. No Qwen-specific fallback is applied.
+- Qwen uses a dedicated request conversion when the trimmed, case-insensitive final model-path segment starts with `qwen`. It sends top-level `enable_thinking` for explicit thinking modes, omits `reasoning_effort`, uses `max_tokens`, and preserves tool-turn reasoning history. Message-level system instructions become assistant history without changing their text or position; top-level system remains first. Streaming follows the client, including non-streaming thinking requests. The upstream must support this field format; no retry or fallback is applied.
 - GLM-5.2 maps effort to `high`/`max`, while GLM-5.3 maps it to `low`/`high`/`max`. Other GLM models reject unsupported explicit effort. GLM family matching is case-insensitive and uses the model-name prefix.
 - Responses include both `request-id` and `x-request-id`. Upstream error bodies are capped at 64 KiB, and valid `Retry-After` values are forwarded without automatic request retries.
 - Stream failures log a diagnostic phase and elapsed time in `error_logs/*.jsonl`; the terminal adds those safe fields to its request summary for correlation.

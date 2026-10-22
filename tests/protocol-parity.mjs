@@ -128,6 +128,30 @@ const upstream = http.createServer(async (request, response) => {
   for await (const buffer of request) buffers.push(buffer);
   const body = JSON.parse(Buffer.concat(buffers));
   lastOutboundRequest = body;
+  if (body.model.trim().split('/').at(-1).toLowerCase().startsWith('qwen')) {
+    const invalid = body.reasoning_effort !== undefined ||
+      body.messages.some((message, index) => index > 0 && message.role === 'system') ||
+      body.max_tokens !== 100 || body.max_completion_tokens !== undefined;
+    if (invalid) {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: 'Qwen request contract violated' } }));
+      return;
+    }
+    const toolTurn = body.tools?.length > 0 && body.messages.at(-1).role !== 'tool';
+    const message = toolTurn
+      ? { role: 'assistant', reasoning_content: 'synthetic reasoning', tool_calls: [tool(0, 'lookup', '{"id":1}')] }
+      : { role: 'assistant', content: 'qwen answer' };
+    const finish = toolTurn ? 'tool_calls' : 'stop';
+    if (body.stream) {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end([chunk(message, finish), usage]
+        .map((item) => `data: ${JSON.stringify(item)}\n\n`).join('') + 'data: [DONE]\n\n');
+    } else {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ message, finish_reason: finish }], usage: usage.usage }));
+    }
+    return;
+  }
   if (!body.stream) {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify(fixtures[Number(body.model)].input));
@@ -221,6 +245,72 @@ try {
   assert.match(prefillError.error.message, /upstreamCapabilities\.assistantPrefill/);
   assert.equal(upstreamRequestCount, requestsBeforePrefill);
   completed++;
+  const qwenBase = {
+    model: 'qwen3.8-27b', max_tokens: 100,
+    messages: [{ role: 'user', content: 'synthetic question' }],
+  };
+  const qwenCases = [
+    { thinking: { type: 'adaptive' } },
+    { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } },
+    { thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } },
+    { thinking: { type: 'disabled' }, output_config: { effort: 'max' } },
+    {},
+    { thinking: { type: 'enabled', budget_tokens: 32000 } },
+    { model: ' vendor/QWEN2 ', system: 'base', messages: [
+      { role: 'user', content: 'question' },
+      { role: 'system', content: [{ type: 'text', text: 'later' }, { type: 'text', text: 'rule' }] },
+      { role: 'user', content: 'continue' },
+    ] },
+    { system: 'base', messages: [
+      { role: 'system', content: '{' }, { role: 'user', content: 'question' },
+    ] },
+  ];
+  for (const streaming of [false, true]) {
+    for (const scenario of qwenCases) {
+      const requestBody = { ...qwenBase, ...scenario, stream: streaming };
+      const attempts = upstreamRequestCount;
+      if (streaming) {
+        const result = await client.messages.stream(requestBody).finalMessage();
+        assert.equal(result.stop_reason, 'end_turn');
+        assert.deepEqual(result.content, [{ type: 'text', text: 'qwen answer' }]);
+      } else {
+        const result = await client.messages.create(requestBody);
+        assert.equal(result.stop_reason, 'end_turn');
+        assert.deepEqual(result.content, [{ type: 'text', text: 'qwen answer' }]);
+      }
+      assert.equal(upstreamRequestCount, attempts + 1);
+      assert.equal(lastOutboundRequest.stream, streaming);
+      assert.equal(lastOutboundRequest.reasoning_effort, undefined);
+      assert.equal(lastOutboundRequest.enable_thinking,
+        scenario.thinking ? scenario.thinking.type !== 'disabled' : undefined);
+      assert.equal(lastOutboundRequest.stream_options?.include_usage, streaming ? true : undefined);
+      const history = requestBody.messages.map((message) => message.role === 'system'
+        ? { role: 'assistant', content: Array.isArray(message.content)
+          ? message.content.map((block) => block.text).join('\n') : message.content }
+        : message);
+      assert.deepEqual(lastOutboundRequest.messages,
+        requestBody.system ? [{ role: 'system', content: requestBody.system }, ...history] : history);
+      completed++;
+    }
+    const toolRequest = { ...qwenBase, stream: streaming, thinking: { type: 'adaptive' },
+      tools: [{ name: 'lookup', input_schema: { type: 'object' } }] };
+    const first = streaming ? await client.messages.stream(toolRequest).finalMessage()
+      : await client.messages.create(toolRequest);
+    assert.equal(first.stop_reason, 'tool_use');
+    const toolUse = first.content.find((block) => block.type === 'tool_use');
+    assert.deepEqual(toolUse.input, { id: 1 });
+    const followup = { ...toolRequest, messages: [...toolRequest.messages,
+      { role: 'assistant', content: first.content },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: 'done' }] },
+    ] };
+    const final = streaming ? await client.messages.stream(followup).finalMessage()
+      : await client.messages.create(followup);
+    assert.equal(final.stop_reason, 'end_turn');
+    assert.deepEqual(final.content, [{ type: 'text', text: 'qwen answer' }]);
+    assert.equal(lastOutboundRequest.messages[1].reasoning_content, 'synthetic reasoning');
+    assert.equal(lastOutboundRequest.messages.at(-1).tool_call_id, toolUse.id);
+    completed++;
+  }
   let streamedText;
   for (const [name, scenario] of Object.entries(cases)) {
     const response = await fetch(`${url}/v1/messages`, {

@@ -448,16 +448,16 @@
     }
   },
   {
-    "name": "qwen thinking follows generic non-streaming conversion",
+    "name": "qwen thinking uses dedicated non-streaming conversion",
     "input": {
       "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
       "stream": false, "thinking": { "type": "enabled" },
       "messages": [{ "role": "user", "content": "Hello" }]
     },
     "expected": {
-      "model": "qwen/qwen3.6-35b-a3b", "max_completion_tokens": 100,
+      "model": "qwen/qwen3.6-35b-a3b", "max_tokens": 100,
       "stream": false,
-      "reasoning_effort": "high",
+      "enable_thinking": true,
       "messages": [{ "role": "user", "content": "Hello" }]
     }
   },
@@ -524,17 +524,41 @@
     }
   },
   {
-    "name": "Qwen 3.8 follows generic explicit effort mapping",
+    "name": "Qwen 3.8 ignores explicit effort",
     "input": {
       "model": "qwen3.8-27b", "max_tokens": 100,
       "output_config": { "effort": "medium" },
       "messages": [{ "role": "user", "content": "Think" }]
     },
     "expected": {
-      "model": "qwen3.8-27b", "max_completion_tokens": 100,
+      "model": "qwen3.8-27b", "max_tokens": 100,
       "stream": false,
-      "reasoning_effort": "medium",
       "messages": [{ "role": "user", "content": "Think" }]
+    }
+  },
+  {
+    "name": "Qwen2 disables thinking despite explicit effort and relabels system history",
+    "input": {
+      "model": " vendor/QWEN2 ", "max_tokens": 100, "stream": true,
+      "thinking": { "type": "disabled" }, "output_config": { "effort": "xhigh" },
+      "system": "Base instruction",
+      "messages": [
+        { "role": "system", "content": "{" },
+        { "role": "user", "content": "Hello" },
+        { "role": "system", "content": [{ "type": "text", "text": "New" }, { "type": "text", "text": "instruction" }] },
+        { "role": "user", "content": "Continue" }
+      ]
+    },
+    "expected": {
+      "model": " vendor/QWEN2 ", "max_tokens": 100, "stream": true,
+      "stream_options": { "include_usage": true }, "enable_thinking": false,
+      "messages": [
+        { "role": "system", "content": "Base instruction" },
+        { "role": "assistant", "content": "{" },
+        { "role": "user", "content": "Hello" },
+        { "role": "assistant", "content": "New\ninstruction" },
+        { "role": "user", "content": "Continue" }
+      ]
     }
   }
 ]
