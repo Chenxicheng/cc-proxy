@@ -8,6 +8,14 @@ The format follows **Keep a Changelog** and this project adheres to **Semantic V
 
 ## [Unreleased]
 
+## [1.3.5] — 2026-10-22
+
+### Fixed
+
+- Restore dedicated conversion for model names with a case-insensitive `qwen` prefix, including provider-qualified names: send explicit thinking modes through top-level `enable_thinking`, omit `reasoning_effort`, use `max_tokens`, and preserve tool-turn reasoning history.
+- Convert Qwen message-level system instructions to assistant history while preserving their text and order; retain the leading top-level system instruction. Non-Qwen roles remain unchanged.
+- Keep Qwen non-streaming thinking requests on the JSON response path and identify the dedicated conversion policy in safe request diagnostics.
+
 ## [1.3.4] — 2026-10-21
 
 ### Added
